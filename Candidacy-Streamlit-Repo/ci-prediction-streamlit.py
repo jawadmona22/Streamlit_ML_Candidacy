@@ -108,7 +108,7 @@ if st.button("Predict Risk Score (CNC)"):
     display_colored_risk("Predicted Risk of CNC Less Than 50 (Left)", below_50_prob_L)
     display_colored_risk("Predicted Risk of CNC Less Than 50 (Right)", below_50_prob_R)
 
-if st.button("Predict Risk Score (AzBio)"):
+if st.button("Predict Risk Score (AzBio, Lateral)"):
     with open('grid_search_azbio_10.pkl', 'rb') as f:
         az_grid_search = pickle.load(f)
 
@@ -161,3 +161,53 @@ if st.button("Predict Risk Score (AzBio)"):
     # Usage
     display_az_colored_risk("Predicted Risk of AzBio Less Than 60 (Left)", below_60_prob_L)
     display_az_colored_risk("Predicted Risk of AzBio Less Than 60 (Right)", below_60_prob_R)
+
+if st.button("Predict Risk Score (AzBio, bilateral)"):
+    with open('grid_search_azbio_bi_10.pkl', 'rb') as f:
+        az_grid_search = pickle.load(f)
+
+    # Build cleaned feature sets
+    az_X_combined = {
+        key: [st.session_state[key]]
+        for key in left_keys + right_keys
+    }
+
+    # Add WRS and age without renaming
+    az_X_combined["WRS_L"] = [st.session_state["WRS_L"]]
+    az_X_combined["WRS_R"] = [st.session_state["WRS_R"]]
+    az_X_combined["Age"] = [st.session_state["Age"]]
+
+    # Convert to DataFrame
+    az_X_df = pd.DataFrame(az_X_combined)
+
+    # Add WRS and Age
+    az_X_df["WRS_L"] = [st.session_state["WRS_L"]]
+    az_X_df["WRS_R"] = [st.session_state["WRS_R"]]
+    az_X_df["Age"] = [st.session_state["Age"]]
+
+    ##########AzBio Risk Prediction#############
+    # Predict
+    az_risk_pred = az_grid_search.best_estimator_.predict(az_X_df)[0]  # The percent change that CNC will be ABOVE 50
+
+    below_60_prob = (10 - az_risk_pred) * 10
+
+
+    # Display
+    def display_az_colored_risk(label, value):
+        if value < 40:
+            color = "green"
+        elif value < 80:
+            color = "orange"
+        else:
+            color = "red"
+
+        st.markdown(
+            f"<div style='font-size:18px; font-weight:bold; color:{color};'>"
+            f"{label}: {value:.1f}%"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+
+    # Usage
+    display_az_colored_risk("Predicted Risk of AzBio Less Than 60 (Bilateral)", below_60_prob)

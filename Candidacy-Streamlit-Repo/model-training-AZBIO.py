@@ -22,7 +22,7 @@ def Clean_Data(debug=False): #This function extracts the columns of interest, re
         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
         'hz4000_R', 'hz4000_L', 'hz6000_R','hz6000_L','hz8000_R','hz8000_L',
-        'WRS_L','WRS_R','Age','AzBioQuiet_L', 'AzBioQuiet_R'
+        'WRS_L','WRS_R','Age','AzBioQuiet_bi'
     ]
 
     #Need to keep everything together to prevent loss of data
@@ -79,13 +79,13 @@ def Add_Categorical_Bins(left_right_data,num_bins,debug):
     #E.G The 25th percentile means 25% of the data is less than or equal to that value.
     percentiles = np.linspace(0,100,num_bins+2)
     binned_data = left_right_data.copy()
-    thresholds = np.unique(np.percentile(left_right_data['AzBioQuiet'],percentiles))
-    binned_data['AzBioQuiet_bin'] = np.digitize(left_right_data['AzBioQuiet'], thresholds, right=True)
+    thresholds = np.unique(np.percentile(left_right_data['AzBioQuiet_bi'],percentiles))
+    binned_data['AzBioQuiet_bin'] = np.digitize(left_right_data['AzBioQuiet_bi'], thresholds, right=True)
     # Identify bin threshold below 50
     fifty_threshold = max(i for i, upper in enumerate(thresholds) if upper < 60)
     if debug:
         plt.figure(figsize=(10, 6))
-        plt.hist(binned_data['AzBioQuiet'], bins=thresholds, edgecolor='black', alpha=0.7)
+        plt.hist(binned_data['AzBioQuiet_bi'], bins=thresholds, edgecolor='black', alpha=0.7)
         plt.axvline(x=thresholds[fifty_threshold], color='red', linestyle='--', label='AzBioQuiet 50 Cutoff')
         plt.legend()
         plt.plot()
@@ -99,12 +99,12 @@ def Add_Categorical_Bins(left_right_data,num_bins,debug):
         print(f"Thresholds {thresholds}")
         print(f"Threshold for AzBioQuiet 60 is bin {fifty_threshold}")
         print(f"Data Bins:{binned_data['AzBioQuiet_bin'] }")
-        print(f"AzBioQuiet for Bin 1: {binned_data[binned_data['AzBioQuiet_bin']==1]['AzBioQuiet']}")
+        print(f"AzBioQuiet for Bin 1: {binned_data[binned_data['AzBioQuiet_bin']==1]['AzBioQuiet_bi']}")
     return binned_data, fifty_threshold
 
 
 def Train_Test_Split(binned_data,debug=False):
-    X = binned_data.drop(columns=['AzBioQuiet_bin', 'AzBioQuiet', 'patient_id'])
+    X = binned_data.drop(columns=['AzBioQuiet_bin', 'AzBioQuiet_bi', 'patient_id'])
     y = binned_data['AzBioQuiet_bin']
     groups = binned_data['patient_id'].values
     # Train-test split
@@ -157,7 +157,7 @@ def Optimize_Model(X_train,y_train,groups_train,debug=False):
         verbose=3
     )
     grid_search.fit(X_train, y_train, groups=groups_train)
-    with open('grid_search_azbio_10.pkl', 'wb') as f:
+    with open('grid_search_azbio_bi_10.pkl', 'wb') as f:
         pickle.dump(grid_search, f)
 
     if debug:
@@ -319,8 +319,10 @@ if __name__ == '__main__':
     #############################
     #Extract columns of interest, remove NA, and add patient ID and CNC bin
     filtered_dataset = Clean_Data(debug=False)
-    left_right_data = Create_Left_Right_Data(filtered_dataset,debug=False)
-    binned_data,fifty_threshold = Add_Categorical_Bins(left_right_data,num_bins=10,debug=True)
+    print(filtered_dataset.head())
+    # left_right_data = Create_Left_Right_Data(filtered_dataset,debug=False)
+    # print(left_right_data.head())
+    binned_data,fifty_threshold = Add_Categorical_Bins(filtered_dataset,num_bins=10,debug=True)
 
     # Split into train/test while preserving which patient is in each group
     X_train, X_test, y_train,y_test,groups_train = Train_Test_Split(binned_data, debug=True)
