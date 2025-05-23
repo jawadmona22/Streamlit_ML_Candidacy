@@ -53,7 +53,7 @@ st.number_input("WRS (Right)", min_value=0, max_value=100, step=1, key="WRS_R")
 # Age input (shared)
 st.number_input("Age", min_value=0, max_value=120, step=1, key="Age")
 
-# Prediction
+# Prediction for CNC
 if st.button("Predict Risk Score (CNC)"):
     with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
         grid_search = pickle.load(f)
@@ -78,6 +78,8 @@ if st.button("Predict Risk Score (CNC)"):
     X_left_df = pd.DataFrame(X_left)
     X_right_df = pd.DataFrame(X_right)
 
+
+    ##########CNC Risk Prediction#############
     # Predict
     risk_pred_L = grid_search.best_estimator_.predict(X_left_df)[0]  #The percent change that CNC will be ABOVE 50
     risk_pred_R = grid_search.best_estimator_.predict(X_right_df)[0]
@@ -106,3 +108,56 @@ if st.button("Predict Risk Score (CNC)"):
     display_colored_risk("Predicted Risk of CNC Less Than 50 (Left)", below_50_prob_L)
     display_colored_risk("Predicted Risk of CNC Less Than 50 (Right)", below_50_prob_R)
 
+if st.button("Predict Risk Score (AzBio)"):
+    with open('grid_search_azbio_10.pkl', 'rb') as f:
+        az_grid_search = pickle.load(f)
+
+    # Build cleaned feature sets
+    az_X_left = {
+        key.replace("_L", ""): [st.session_state[key]]
+        for key in left_keys
+    }
+    az_X_right = {
+        key.replace("_R", ""): [st.session_state[key]]
+        for key in right_keys
+    }
+
+    # Add WRS and Age
+    az_X_left["WRS"] = [st.session_state["WRS_L"]]
+    az_X_right["WRS"] = [st.session_state["WRS_R"]]
+    az_X_left["Age"] = [st.session_state["Age"]]
+    az_X_right["Age"] = [st.session_state["Age"]]
+
+    # Convert to DataFrames
+    az_X_left_df = pd.DataFrame(az_X_left)
+    az_X_right_df = pd.DataFrame(az_X_right)
+
+    ##########AzBio Risk Prediction#############
+    # Predict
+    az_risk_pred_L = az_grid_search.best_estimator_.predict(az_X_left_df)[0]  # The percent change that CNC will be ABOVE 50
+    az_risk_pred_R = az_grid_search.best_estimator_.predict(az_X_right_df)[0]
+
+    below_60_prob_L = (10 - az_risk_pred_L) * 10
+    below_60_prob_R = (10 - az_risk_pred_R) * 10
+
+
+    # Display
+    def display_az_colored_risk(label, value):
+        if value < 40:
+            color = "green"
+        elif value < 80:
+            color = "orange"
+        else:
+            color = "red"
+
+        st.markdown(
+            f"<div style='font-size:18px; font-weight:bold; color:{color};'>"
+            f"{label}: {value:.1f}%"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+
+    # Usage
+    display_az_colored_risk("Predicted Risk of AzBio Less Than 60 (Left)", below_60_prob_L)
+    display_az_colored_risk("Predicted Risk of AzBio Less Than 60 (Right)", below_60_prob_R)
