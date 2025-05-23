@@ -10,7 +10,7 @@ st.title("Audiogram Input Page")
 frequencies = ["125", "250", "500", "750", "1000", "1500", "2000", "3000", "4000", "6000", "8000"]
 left_keys = [f"hz{f}_L" for f in frequencies]
 right_keys = [f"hz{f}_R" for f in frequencies]
-all_keys = left_keys + right_keys + ['WRS_L', 'WRS_R', 'age']
+all_keys = left_keys + right_keys + ['WRS_L', 'WRS_R', 'Age']
 
 # Initialize session state
 for key in all_keys:
@@ -23,7 +23,7 @@ if st.button("Generate Random Audiogram Data"):
         st.session_state[key] = random.randint(0, 120)
     st.session_state['WRS_L'] = random.randint(0, 100)
     st.session_state['WRS_R'] = random.randint(0, 100)
-    st.session_state['age'] = random.randint(18, 95)
+    st.session_state['Age'] = random.randint(18, 95)
 
 
 # Input layout function
@@ -51,7 +51,7 @@ input_table("Right Audiogram Data", right_keys, "Right", columns_per_row=4)
 st.number_input("WRS (Right)", min_value=0, max_value=100, step=1, key="WRS_R")
 
 # Age input (shared)
-st.number_input("Age", min_value=0, max_value=120, step=1, key="age")
+st.number_input("Age", min_value=0, max_value=120, step=1, key="Age")
 
 # Prediction
 if st.button("Predict Risk Score (CNC)"):
@@ -68,11 +68,11 @@ if st.button("Predict Risk Score (CNC)"):
         for key in right_keys
     }
 
-    # Add WRS and age
+    # Add WRS and Age
     X_left["WRS"] = [st.session_state["WRS_L"]]
     X_right["WRS"] = [st.session_state["WRS_R"]]
-    X_left["age"] = [st.session_state["age"]]
-    X_right["age"] = [st.session_state["age"]]
+    X_left["Age"] = [st.session_state["Age"]]
+    X_right["Age"] = [st.session_state["Age"]]
 
     # Convert to DataFrames
     X_left_df = pd.DataFrame(X_left)
