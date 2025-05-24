@@ -3,6 +3,7 @@ import random
 import pickle
 import pandas as pd
 import sklearn
+from xgboost import XGBClassifier
 
 st.title("Audiogram Input Page")
 
