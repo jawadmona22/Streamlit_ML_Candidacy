@@ -2,6 +2,7 @@ import streamlit as st
 import random
 import pickle
 import pandas as pd
+import sklearn
 
 st.title("Audiogram Input Page")
 
