@@ -57,7 +57,7 @@ st.number_input("Age", min_value=0, max_value=120, step=1, key="Age")
 
 # Prediction for CNC
 if st.button("Predict Risk Score (CNC)"):
-    with open('best_grid_search_10_bins_percentiles.pkl', 'rb') as f:
+    with open('Candidacy-Streamlit-Repo/best_grid_search_10_bins_percentiles.pkl', 'rb') as f:
         grid_search = pickle.load(f)
 
     # Build cleaned feature sets
@@ -117,7 +117,7 @@ if st.button("Predict Risk Score (CNC)"):
 
 
 if st.button("Predict Risk Score (AzBio, bilateral)"):
-    with open('grid_search_azbio_bi_10.pkl', 'rb') as f:
+    with open('Candidacy-Streamlit-Repo/grid_search_azbio_bi_10.pkl', 'rb') as f:
         az_grid_search = pickle.load(f)
 
     # Build cleaned feature sets
