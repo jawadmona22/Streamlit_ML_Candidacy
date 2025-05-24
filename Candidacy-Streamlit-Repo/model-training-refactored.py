@@ -336,9 +336,9 @@ if __name__ == '__main__':
         groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
         X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
     #Run grid search on the split data **for multicategorical classifier**
-    # grid_search = Optimize_Model(X_train,y_train,groups_train,debug=True) #saves to best_grid_search_4_9.pkl
-    with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
-        grid_search = pickle.load(f)
+    grid_search = Optimize_Model(X_train,y_train,groups_train,debug=True) #saves to best_grid_search_4_9.pkl
+    # with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
+    #     grid_search = pickle.load(f)
 
 
     #Sanity check our best model with a confusion matrix on X_test

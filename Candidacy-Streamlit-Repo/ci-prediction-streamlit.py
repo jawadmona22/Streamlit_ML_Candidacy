@@ -57,7 +57,7 @@ st.number_input("Age", min_value=0, max_value=120, step=1, key="Age")
 
 # Prediction for CNC
 if st.button("Predict Risk Score (CNC)"):
-    with open('Candidacy-Streamlit-Repo/best_grid_search_10_bins_smote.pkl', 'rb') as f:
+    with open('best_grid_search_10_bins_percentiles.pkl', 'rb') as f:
         grid_search = pickle.load(f)
 
     # Build cleaned feature sets
@@ -117,14 +117,28 @@ if st.button("Predict Risk Score (CNC)"):
 
 
 if st.button("Predict Risk Score (AzBio, bilateral)"):
-    with open('Candidacy-Streamlit-Repo/grid_search_azbio_bi_10.pkl', 'rb') as f:
+    with open('grid_search_azbio_bi_10.pkl', 'rb') as f:
         az_grid_search = pickle.load(f)
 
     # Build cleaned feature sets
-    az_X_combined = {
+    az_X_L = {
         key: [st.session_state[key]]
-        for key in left_keys + right_keys
+        for key in left_keys
     }
+
+    az_X_R = {
+        key: [st.session_state[key]]
+        for key in right_keys
+    }
+
+    # Stagger/combine them
+    combined = {}
+    for k1, k2 in zip(right_keys, left_keys):
+        combined[k1] = az_X_R[k1]
+        combined[k2] = az_X_L[k2]
+
+
+    az_X_combined = pd.DataFrame(combined)
 
     # Add WRS and age without renaming
     az_X_combined["WRS_L"] = [st.session_state["WRS_L"]]
@@ -138,6 +152,8 @@ if st.button("Predict Risk Score (AzBio, bilateral)"):
     az_X_df["WRS_L"] = [st.session_state["WRS_L"]]
     az_X_df["WRS_R"] = [st.session_state["WRS_R"]]
     az_X_df["Age"] = [st.session_state["Age"]]
+
+    print(az_X_df.columns)
 
     ##########AzBio Risk Prediction#############
     # Predict
