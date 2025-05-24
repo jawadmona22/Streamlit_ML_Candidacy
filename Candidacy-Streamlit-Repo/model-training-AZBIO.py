@@ -325,38 +325,38 @@ if __name__ == '__main__':
     binned_data,fifty_threshold = Add_Categorical_Bins(filtered_dataset,num_bins=10,debug=True)
     print(f"Fifty Threshold: {fifty_threshold}")
     # Split into train/test while preserving which patient is in each group
-    # X_train, X_test, y_train,y_test,groups_train = Train_Test_Split(binned_data, debug=True)
-    #
-    # if smote:
-    #     #Equal *spaced* bins with SMOTE applied
-    #     smote = SMOTE(sampling_strategy="auto", random_state=42)
-    #     X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-    #     plt.hist(y_train_resampled, edgecolor='black', alpha=0.7)
-    #     # Extend `groups_train` to match SMOTE's new sample count
-    #     num_new_samples = len(X_train_resampled) - len(X_train)
-    #     # Assign synthetic samples a placeholder group (-1)
-    #     groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
-    #     X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
-    # #Run grid search on the split data **for multicategorical classifier**
-    # grid_search = Optimize_Model(X_train,y_train,groups_train,debug=True) #saves to best_grid_search_4_9.pkl
-    # # with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
-    # #     grid_search = pickle.load(f)
-    #
-    #
-    # #Sanity check our best model with a confusion matrix on X_test
-    # y_pred = grid_search.best_estimator_.predict(X_test)
-    # print("XTest",X_test)
-    # model_name = grid_search.best_estimator_.named_steps['classifier'].__class__.__name__
-    # fig, ax = plt.subplots(figsize=(6, 5))
-    # ConfusionMatrixDisplay.from_predictions(y_test, y_pred, ax=ax)
-    # ax.set_title(f"Best Model ({model_name}) on Test Data")
-    # plt.show()
-    #
-    #
-    # run_visualizations(grid_search, X_test, y_test,bin_threshold=fifty_threshold)
-    #
-    #
-    #
+    X_train, X_test, y_train,y_test,groups_train = Train_Test_Split(binned_data, debug=True)
+
+    if smote:
+        #Equal *spaced* bins with SMOTE applied
+        smote = SMOTE(sampling_strategy="auto", random_state=42)
+        X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+        plt.hist(y_train_resampled, edgecolor='black', alpha=0.7)
+        # Extend `groups_train` to match SMOTE's new sample count
+        num_new_samples = len(X_train_resampled) - len(X_train)
+        # Assign synthetic samples a placeholder group (-1)
+        groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
+        X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
+    #Run grid search on the split data **for multicategorical classifier**
+    grid_search = Optimize_Model(X_train,y_train,groups_train,debug=True) #saves to best_grid_search_4_9.pkl
+    # with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
+    #     grid_search = pickle.load(f)
+
+
+    #Sanity check our best model with a confusion matrix on X_test
+    y_pred = grid_search.best_estimator_.predict(X_test)
+    print("XTest",X_test)
+    model_name = grid_search.best_estimator_.named_steps['classifier'].__class__.__name__
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ConfusionMatrixDisplay.from_predictions(y_test, y_pred, ax=ax)
+    ax.set_title(f"Best Model ({model_name}) on Test Data")
+    plt.show()
+
+
+    run_visualizations(grid_search, X_test, y_test,bin_threshold=fifty_threshold)
+
+
+
 
 
 
