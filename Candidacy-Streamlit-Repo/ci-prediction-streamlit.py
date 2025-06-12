@@ -5,6 +5,10 @@ import pandas as pd
 import sklearn
 from xgboost import XGBClassifier
 
+###Purely just a UI that loads in the ML model specified and uses it to generate the "Calculator" and corresponding risk score
+
+
+
 st.title("Audiogram Input Page")
 
 
