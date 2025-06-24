@@ -1,6 +1,7 @@
 import pandas as pd
 from sklearn.model_selection import GroupKFold,GridSearchCV,GroupShuffleSplit,ParameterGrid,KFold
-from sklearn.pipeline import Pipeline
+# from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 import pickle
 from xgboost import XGBClassifier
@@ -172,184 +173,6 @@ def Train_Test_Split(binned_data,debug=False,raw=False):
 
 
 
-
-
-
-def run_visualizations(grid_search,X_train,y_train,X_test,y_test,bin_threshold,raw=False,label='Default',full=False):
-    best_models = {}
-    model_performance = []
-    if full == True:
-        X_test = pd.concat([X_test, X_train], axis=0, ignore_index=True)
-        y_test = pd.concat([y_test,y_train],axis=0,ignore_index=True)
-
-    for i, param in enumerate(grid_search.cv_results_['params']):
-        model_name = param['classifier'].__class__.__name__
-        mean_score = grid_search.cv_results_['mean_test_score'][i]
-
-        # Only store the best param set per model
-        if model_name not in best_models or mean_score > best_models[model_name]['score']:
-            best_models[model_name] = {
-                'params': param,
-                'score': mean_score
-            }
-
-    # Refit the best model for each model type
-    for model_name in best_models:
-        best_param = best_models[model_name]['params']
-        model_pipeline = grid_search.estimator.set_params(**best_param)
-        model_pipeline.fit(X_train, y_train)
-        classifier = model_pipeline.named_steps['classifier']
-        best_models[model_name]['model'] = classifier  # Store fitted classifier
-        plt.close('all')
-        plt.figure()
-    for model_name, model_info in best_models.items():
-        best_model = model_info['model']
-        print(f"Running model: {model_name}")
-        y_true_binary = (y_test <= bin_threshold).astype(int)
-        y_pred_prob = best_model.predict_proba(X_test)  #Outputs an array of probabilities for each test data corresponding to the ten categories
-        # Classes to sum for binary prob
-        pred_prob_below_thresh = y_pred_prob[:, :bin_threshold].sum(axis=1)
-        y_pred_prob_binary = (pred_prob_below_thresh >= 0.5).astype(int) #We classify as "1" if your probability is >=.5
-        # Compute ROC curve and AUC
-        fpr, tpr, _ = roc_curve(y_true_binary, y_pred_prob_binary)
-        roc_auc = auc(fpr, tpr)
-        # Plot the ROC curve
-        plt.plot(fpr, tpr, label=f"{model_name} (AUC = {roc_auc:.3f})")
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title(f"ROC AUC Curve (Threshold = {bin_threshold})")
-        plt.legend()
-
-        # Bootstrap ROC and get confidence bounds
-        fpr,tpr, tpr_lower, tpr_upper = bootstrap_roc_auc(
-            y_true_binary, y_pred_prob_binary
-        )
-        # Compute AUC for the lower bound of the TPR
-        auc_lower_bound = auc(fpr, tpr_lower)
-
-        # Compute AUC for the upper bound of the TPR
-        auc_upper_bound = auc(fpr, tpr_upper)
-
-
-        tn,fp,fn,tp = confusion_matrix(y_true_binary,y_pred_prob_binary).ravel() #Ravel flattens this into a 1d Array so we can assign the variables
-        sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
-        specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
-        precision = precision_score(y_true_binary, y_pred_prob_binary, zero_division=0)
-        recall = recall_score(y_true_binary, y_pred_prob_binary, zero_division=0)
-        f1 = f1_score(y_true_binary, y_pred_prob_binary, zero_division=0)
-
-
-        # roc_auc = auc(fpr, mean_tpr)
-        # plt.plot(fpr, mean_tpr, label=f"{model_name} (AUC = {roc_auc:.3f})")
-        plt.fill_between(fpr, tpr_lower, tpr_upper, alpha=0.2)
-        model_performance.append({
-            'Model': model_name,
-            'AUC': roc_auc,
-            'CI Lower Bound': auc_lower_bound,
-            'CI Upper Bound': auc_upper_bound,
-            'Sensitivity': sensitivity,
-            'Specificity': specificity,
-            'Precision': precision,
-            'Recall': recall,
-            'F1 Score': f1
-        })
-
-    # Final plot settings
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC AUC Curve with 95% CI")
-    plt.legend()
-    plt.plot([0, 1], [0, 1], 'k--', label="Chance (AUC = 0.5)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"{label}-AUC.png")
-    # plt.show()
-
-    performance_df = pd.DataFrame(model_performance)
-    # Display the table of AUC and CI for each model
-    performance_df.to_excel(f"performance-{label}.xlsx")
-
-    ##Calibration curves
-    # plt.figure(figsize=(8, 6))
-
-    # Set up subplot grid
-    num_models = len(best_models)
-    ncols = 2
-    nrows = (num_models + 1) // ncols  # Round up for uneven count
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 4 * nrows))
-    axes = axes.flatten()  # Flatten to index easily
-
-    for idx, (model_name, model_info) in enumerate(best_models.items()):
-        ax = axes[idx]
-        best_model = model_info['model']
-        print(f"Running model: {model_name}")
-
-        y_true_binary = (y_test <= bin_threshold).astype(int)
-        y_pred_prob = best_model.predict_proba(X_test)
-        pred_prob_below_thresh = y_pred_prob[:, :bin_threshold].sum(axis=1)
-        print("pred proba:",pred_prob_below_thresh)
-        for i in range(len(pred_prob_below_thresh)):
-            if pred_prob_below_thresh[i] >= 1:
-                pred_prob_below_thresh[i] = 1
-
-        fraction_of_positives, mean_predicted_value = calibration_curve(
-            y_true_binary, pred_prob_below_thresh, n_bins=10
-        )
-
-        # Plot calibration curve
-        ax.plot(mean_predicted_value, fraction_of_positives, marker='o', label='Calibration Curve')
-
-        # Plot histogram for RandomForest
-        # if "Random" in model_name:
-        counts, bins = np.histogram(pred_prob_below_thresh, bins=10, range=(0, 1))
-        proportions = counts / counts.sum()
-        bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        bin_width = bins[1] - bins[0]
-        bars = ax.bar(bin_centers, proportions, width=bin_width, alpha=0.5, label='Pred Prob Histogram')
-        ax.set_ylim(0, 1)
-        # Add percent text on top of each bar
-        for i, bar in enumerate(bars):
-            percent = proportions[i] * 100
-            if percent > 0:
-                ax.text(bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + 0.02,  # position just above bar
-                        f"{percent:.1f}%",  # 1 decimal place
-                        ha='center', va='bottom', fontsize=10)
-        # Perfect calibration line
-        ax.plot([0, 1], [0, 1], 'k--', label='Perfectly Calibrated')
-
-        ax.set_title(f"{model_name} Calibration")
-        ax.set_xlabel("Mean Predicted Probability")
-        ax.set_ylabel("Fraction of Positives")
-        # ax.legend(loc='best')
-        ax.grid(True)
-
-    # Hide any unused subplots
-    for j in range(idx + 1, len(axes)):
-        fig.delaxes(axes[j])
-
-    plt.tight_layout()
-    plt.savefig(f"{label}-cal.png")
-    # plt.show()
-    #######Confusion Matrix##########
-    # Get confusion matrix
-    # cm = confusion_matrix(y_true, y_pred)
-    #
-    # # Convert to percentage
-    # cm_percent = cm / cm.sum() * 100  # Normalize to sum = 100
-    #
-    # # Set class labels
-    # labels = ['Negative', 'Positive']
-    #
-    # # Plot
-    # plt.figure(figsize=(6, 5))
-    # sns.heatmap(cm_percent, annot=True, fmt='.1f', cmap='Blues',
-    #             xticklabels=labels, yticklabels=labels)
-    #
-    # plt.xlabel('Predicted Label')
-    # plt.ylabel('True Label')
-    # plt.title('Confusion Matrix (% of total samples)')
-    # plt.show()
 
 def sixty_sixty_predictions(X_test):
     y_pred = []
@@ -548,11 +371,12 @@ def visuals_with_full_set(all_labels,label):
 
 
 
-def Post_Iter_Processing():
+def Post_Iter_Processing(folder_name = '',file_name=''):
     # Load the combined predictions
-
-
-    folder = Path('bins-pkls')
+    if folder_name != '':
+        folder = Path('folder_name')
+    else:
+        folder = Path('bins-pkls')
     iter_info = []
     for pkl_file in folder.glob('*.pkl'):
         print(f"Loading: {pkl_file.name}")
@@ -571,21 +395,18 @@ def Post_Iter_Processing():
             n_folds=('AUC', 'count')
         ).reset_index()
 
-        # --- Compute 95% confidence intervals ---
         summary['f1_95ci'] = t.ppf(0.975, summary['n_folds'] - 1) * summary['f1_std'] / np.sqrt(summary['n_folds'])
         summary['auc_95ci'] = t.ppf(0.975, summary['n_folds'] - 1) * summary['auc_std'] / np.sqrt(summary['n_folds'])
 
-        # --- Sort by AUC or F1 as needed ---
         summary_sorted = summary.sort_values('auc_mean', ascending=False)
 
-        # --- Display summary ---
         first_row = \
         summary_sorted[['ModelName', 'f1_mean', 'f1_std', 'f1_95ci', 'auc_mean', 'auc_std', 'auc_95ci']].iloc[:3]
         iter_info.append(summary_sorted.copy())
-        # Print the full first row as a readable string
         print("\n Best Model Summary (Top Row):")
         print(first_row.to_string())
 
+        ####Confusion Matrix Visuals
 
         # Sum all values
         totals = df[['tp', 'tn', 'fp', 'fn']].sum()
@@ -632,8 +453,33 @@ def Post_Iter_Processing():
         ax.set_title(f"{ModelName}", fontsize=14)
         plt.grid(False)
         plt.tight_layout()
-        plt.savefig(f'TRIO-figs/{ModelName}-cm.png')
+        plt.savefig(f'TRIO-figs/{ModelName}{file_name}-cm.png')
         # plt.show()
+
+        # Compute AUC
+        for _, row in df.iterrows():
+            y_true = np.array(row['y_true_binary'])
+            y_score = np.array(row['y_pred_proba'])
+            y_score_binary = np.clip(y_score[:, :7].sum(axis=1), 0, 1)
+
+            fpr, tpr, _ = roc_curve(y_true, y_score_binary)
+            roc_auc = auc(fpr, tpr)
+            print(f"AUC: {roc_auc}")
+
+            # Compute calibration curve
+            prob_true, prob_pred = calibration_curve(y_true, y_score_binary, n_bins=5)
+
+            # Plot
+            plt.close('all')
+            plt.plot(prob_pred, prob_true, marker='o', label='Calibration curve')
+            plt.plot([0, 1], [0, 1], linestyle='--', label='Perfect calibration')
+            plt.xlabel('Mean predicted probability')
+            plt.ylabel('Fraction of positives')
+            plt.title('Calibration Curve')
+            plt.legend()
+            plt.show()
+
+
 
     # summary_df = pd.concat(iter_info, ignore_index=True)
     # print(summary_df.head())
@@ -697,7 +543,7 @@ def Demographics_Table():
 
 
 
-def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_preds=False,smote=False):
+def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_preds=False,smote=False,file_name='',folder_name=''):
 
     if smote:
         pipeline = Pipeline([
@@ -800,9 +646,10 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
                     y_true_binary = y_test
                     y_pred_binary = y_pred
                     y_pred_prob_binary = y_pred_prob[:, 1]
+                    pred_prob_below_thresh = y_pred_prob_binary
 
                 #Compute Metrics for the fold
-                fpr, tpr, _ = roc_curve(y_true_binary, y_pred_prob_binary)
+                fpr, tpr, _ = roc_curve(y_true_binary, pred_prob_below_thresh)
                 roc_auc = auc(fpr, tpr)
 
                 # Metrics: Binarize
@@ -832,7 +679,12 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
                     'fp':fp,
                     'fn':fn,
                     'y_pred': y_pred,
-                    'y_pred_proba': y_pred_prob
+                    'y_pred_proba': y_pred_prob,
+                    'y_scores':pred_prob_below_thresh,
+                    'y_true':y_test,
+                    'y_true_binary': y_true_binary,
+                    'y_pred_binary': y_pred_binary,
+                    'y_pred_prob_binary':y_pred_prob_binary
 
                 }
                 print(new_row)
@@ -842,7 +694,7 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
 
         all_iter_results = pd.DataFrame(iter_results)
 
-        all_iter_results.to_pickle(f'{model_name}_nested_raw2bi.pkl')
+        all_iter_results.to_pickle(f'{folder_name}/{model_name}_nested_{file_name}.pkl')
 
         print(all_iter_results.head())
 
@@ -860,16 +712,20 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
 if __name__ == '__main__':
     # different_variables_run()
     # sixty_sixty_run()  #Run this to get 60/60 CM and information
-    # Demographics_Table()
-    # all_labels =  [
-    #     'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-    #     'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-    #     'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-    #     'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-    #     'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-    #     'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
-    # ]
-    # nested_cross_optimize(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels,raw_preds=True)
+    # Demographics_Table() #Run this to get demographics information
+    all_labels =  [
+        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
+    ]
+
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=False,file_name='reg',folder_name='bins-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=True,file_name='smote',folder_name='bins-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=False,file_name='reg',folder_name='binary-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=True,file_name='smote',folder_name='binary-pkls')
     # Post_Iter_Processing()
 
 
