@@ -7,9 +7,6 @@ from xgboost import XGBClassifier
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
-from sklearn.linear_model import LinearRegression
-from xgboost import XGBRegressor
-from sklearn.ensemble import RandomForestRegressor
 from tqdm import tqdm
 from sklearn.metrics import  ConfusionMatrixDisplay
 from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score
@@ -20,10 +17,7 @@ from imblearn.over_sampling import SMOTE
 from sklearn.metrics import roc_curve, roc_auc_score
 from sklearn.metrics import accuracy_score
 import seaborn as sns
-from pycaret.classification import setup, compare_models, pull
-from pycaret.classification import *
 from pathlib import Path
-import joblib
 from scipy.stats import t
 from sklearn import preprocessing
 
@@ -177,197 +171,10 @@ def Train_Test_Split(binned_data,debug=False,raw=False):
         return X_train, X_test, y_train, y_test, groups_train
 
 
-def generate_repeated_group_kfold(X, y, groups, n_splits=10, n_repeats=100, random_state=42):
-
-    rng = np.random.RandomState(random_state)
-    unique_groups = np.unique(groups)
-    all_splits = []
-
-    for repeat in range(n_repeats):
-        # Shuffle the unique group labels
-        shuffled_groups = rng.permutation(unique_groups)
-
-        # Map each group to a new shuffled index
-        group_to_fold_index = {group: i for i, group in enumerate(shuffled_groups)}
-
-        # Apply that mapping to the full group array to change fold assignments
-        shuffled_group_labels = np.array([group_to_fold_index[group] for group in groups])
-
-        # Create a new GroupKFold and generate splits using the shuffled labels
-        group_kfold = GroupKFold(n_splits=n_splits)
-        for train_idx, test_idx in group_kfold.split(X, y, groups=shuffled_group_labels):
-            all_splits.append((train_idx, test_idx))
-
-    return all_splits
-
-def Optimize_Model_Repeated_Iters(X,y,groups,debug=False,raw=False,soft_label=False,pkl_name = 'grid_search'):
-    # --- Classifier-specific hyperparameter grids ---
-    cv = generate_repeated_group_kfold(X,y,groups,n_splits=10,n_repeats=100,random_state=42)
-    model_configs = {
-        'RandomForest': {
-            'model': RandomForestClassifier(random_state=42),
-            'param_grid': {
-                'n_estimators': [100, 200],
-                'max_depth': [10, None]
-            }
-        },
-        'XGBoost': {
-            'model': XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42),
-            'param_grid': {
-                'n_estimators': [100, 200],
-                'max_depth': [3, 6],
-                'learning_rate': [0.1, 0.2]
-            }
-        },
-        'LogisticRegression': {
-            'model': LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000),
-            'param_grid': {
-                'penalty': ['l2']
-            }
-        }
-    }
-
-    # --- Store all results ---
-    all_predictions = []
-    # --- Loop over each classifier type ---
-    for model_name, config in tqdm(model_configs.items(), desc="Models", position=0):
-        base_model = config['model']
-        param_grid = config['param_grid']
-        model_predictions = []
-
-        print(f"\n🔍 Running grid search for {model_name}...")
-
-        for params in tqdm(ParameterGrid(param_grid), desc=f"{model_name} Grid", position=1, leave=False):
-            # print(f"  ➤ Params: {params}")
-            model = base_model.set_params(**params)
-            #K-fold loop
-            for fold_idx, (train_idx, test_idx) in tqdm(
-                    list(enumerate(cv)),
-                    total=len(cv),
-                    desc="Folds",
-                    position=2,
-                    leave=False
-            ):
-                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-                group_test = groups[test_idx]
-
-                # Train and predict
-                model.fit(X_train, y_train)
-                y_full = pd.concat([y_test,y_train],axis=0,ignore_index=True)
-                X_full = pd.concat([X_test, X_train], axis=0, ignore_index=True)
-
-                y_pred = model.predict(X_full)
-
-                # Predict probabilities
-                y_pred_proba = model.predict_proba(X_full)
-
-                pred_df = pd.DataFrame({
-                    'y_true': y_full.values,
-                    'y_pred': y_pred,
-                    # 'patient_id': group_test,
-                    'fold': fold_idx,
-                    'model': model_name,
-                    'params': [str(params)] * len(y_full),
-                })
-
-                proba_column = [row for row in y_pred_proba]  # Each row is a list of class probs
-
-                # Add to prediction DataFrame
-                pred_df["proba_vector"] = proba_column
-
-
-                all_predictions.append(pred_df)
-                model_predictions.append(pred_df)
-            intermediate_df = pd.concat(model_predictions, ignore_index=True)
-            intermediate_df.to_pickle(f"{model_name}_iters_{pkl_name}.pkl")
-
-            all_predictions.extend(model_predictions)
-            # --- Combine everything into one DataFrame ---
-    full_predictions = pd.concat(all_predictions, ignore_index=True)
-    full_predictions.to_pickle(f"All_Iter_Predictions_{pkl_name}.pkl")
-def Optimize_Model(X_train,y_train,groups_train,debug=False,raw=False,soft_label=False,pkl_name = 'grid_search'):
-    '''This section will take the selected model in 'params' and train the model'''
-
-    # kf = GroupKFold(n_splits=10)
-    print(f"Shape of X: {X_train.shape}")
-    cv_splits = generate_repeated_group_kfold(X_train, y_train, groups=groups_train, n_splits=2, n_repeats=2)
-
-    if raw == False: #Case: classification problem
-        pipeline = Pipeline([
-            ('classifier', RandomForestClassifier(random_state=42))  # Placeholder, will be overridden
-        ])
-        # Define parameter grids for different classifiers
-        param_grid = [
-            {  # Random Forest
-                'classifier': [RandomForestClassifier(random_state=42)],
-                'classifier__n_estimators': [50, 100, 200],
-                'classifier__max_depth': [10, 20, None],
-                'classifier__min_samples_split': [2, 5, 10]
-            },
-            {  # XGBoost
-                'classifier': [XGBClassifier( eval_metric='logloss', random_state=42)],
-                'classifier__n_estimators': [50, 100, 200],
-                'classifier__max_depth': [3, 6, 10],
-                'classifier__learning_rate': [0.01, 0.1, 0.2]
-            },
-            {  # Vanilla Logistic Regression (no hyperparameter tuning)
-                'classifier': [LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)]
-                # No hyperparameters specified
-            }
-        ]
-
-        # Perform GridSearchCV with GroupKFold
-        grid_search = GridSearchCV(
-            pipeline,
-            param_grid=param_grid,
-            scoring='f1_micro',
-            cv=cv_splits,
-            n_jobs=-1,
-            verbose=3
-        )
-        grid_search.fit(X_train, y_train, groups=groups_train)
-        with open(f'{pkl_name}.pkl', 'wb') as f:
-            pickle.dump(grid_search, f)
-
-        if debug:
-
-            y_pred = grid_search.best_estimator_.predict(X_train)
-            # Extract the classifier name from the pipeline
-            model_name = grid_search.best_estimator_.named_steps['classifier'].__class__.__name__
-
-            # Plot confusion matrix
-            fig, ax = plt.subplots(figsize=(6, 5))
-            ConfusionMatrixDisplay.from_predictions(y_train, y_pred, ax=ax)
-            ax.set_title(f"Training Data Confusion Matrix {model_name}")
-            plt.show()
-        return grid_search
 
 
 
-def bootstrap_roc_auc(y_true, y_score, n_bootstraps=1000, random_state=42):
-    rng = np.random.RandomState(random_state)
-    tprs = []
-    base_fpr = np.linspace(0, 1, 101)
-    y_true = np.array(y_true)
-    y_score = np.array(y_score)
-    for _ in range(n_bootstraps):
-        indices = rng.choice(len(y_true), size=len(y_true), replace=True)
-        # if len(np.unique(y_true[indices])) < 2:
-        #     continue  # skip if only one class present
-        fpr, tpr, _ = roc_curve(y_true[indices], y_score[indices])
-        tpr_interp = np.interp(base_fpr, fpr, tpr)
-        tpr_interp[0] = 0.0
-        tprs.append(tpr_interp)
 
-    tprs = np.array(tprs)
-    mean_tpr = tprs.mean(axis=0)
-    std_tpr = tprs.std(axis=0)
-    tprs_lower = np.clip(mean_tpr - 1.96 * std_tpr, 0, 1)
-    print(tprs_lower)
-    tprs_upper = np.clip(mean_tpr + 1.96 * std_tpr, 0, 1)
-
-    return base_fpr, mean_tpr, tprs_lower, tprs_upper
 def run_visualizations(grid_search,X_train,y_train,X_test,y_test,bin_threshold,raw=False,label='Default',full=False):
     best_models = {}
     model_performance = []
@@ -561,9 +368,7 @@ def sixty_sixty_predictions(X_test):
     return y_pred
 
 
-def soft_label(y, center=40, sharpness=15):
-    """Smoothly map scores to probabilities that y <= center."""
-    return 1 / (1 + np.exp((y - center) / sharpness))
+
 
 
 def different_variables_run(full=False):
@@ -656,9 +461,67 @@ def sixty_sixty_run():
         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
+    filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
+    left_right_data = Create_Left_Right_Data(filtered_dataset, debug=False)
+    X_test = left_right_data.drop(columns=[ 'CNC', 'patient_id'])
+    y_test = left_right_data['CNC']
 
-    main_ml_call(method="60/60",label="sixty",all_labels=all_labels)
+    # Get predictions
+    y_pred = sixty_sixty_predictions(X_test)
+    y_true_binary = (y_test < 50).astype(int)
 
+    # Accuracy
+    accuracy = accuracy_score(y_true_binary, y_pred)
+    print(f"Accuracy: {accuracy:.2f}")
+
+    # Confusion Matrix
+    conf_matrix = confusion_matrix(y_true_binary, y_pred)
+    total = conf_matrix.sum()
+    percent_matrix = conf_matrix / total * 100
+    percent_matrix = np.round(percent_matrix, 1)
+
+    # Define annotations and custom colors
+    labels = np.array([
+        [f"{percent_matrix[0, 0]}%", f" {percent_matrix[0, 1]}%"],
+        [f"{percent_matrix[1, 0]}%", f" {percent_matrix[1, 1]}%"]
+    ])
+
+    # Custom color matrix: light red for FP/FN, green for TP/TN
+    colors = np.array([
+        ['#a8e6a1', '#f4cccc'],  # TN, FP
+        ['#f4cccc', '#a8e6a1']  # FN, TP
+    ])
+
+    # Plot with custom colored cells
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    for i in range(2):
+        for j in range(2):
+            ax.add_patch(plt.Rectangle((j, i), 1, 1, color=colors[i, j]))
+            ax.text(j + 0.5, i + 0.5, labels[i, j],
+                    ha='center', va='center', fontsize=12, fontweight='bold')
+
+    # Formatting
+    ax.set_xticks([0.5, 1.5])
+    ax.set_yticks([0.5, 1.5])
+    ax.set_xticklabels(['Predicted Non-Candidate', 'Predicted Candidate'])
+    ax.set_yticklabels(['Actual Non-Candidate', 'Actual Candidate'])
+    ax.set_xlim(0, 2)
+    ax.set_ylim(0, 2)
+    ax.invert_yaxis()
+    ax.set_title(f"60/60 Rule", fontsize=14)
+    plt.grid(False)
+    plt.tight_layout()
+    plt.savefig(f'TRIO-figs/60-60-cm.png')
+
+    tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred).ravel()
+    precision = precision_score(y_true_binary, y_pred, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred, zero_division=0)
+    sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
+    specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
+    print(
+        f"Precision: {precision}, Recall: {recall}, F1: {f1}, Sensitivity:{sensitivity}, Specificity: {specificity}")
 
 
 def visuals_with_full_set(all_labels,label):
@@ -681,130 +544,6 @@ def visuals_with_full_set(all_labels,label):
             run_visualizations(grid_search, X_train, y_train, X_test, y_test, 7, raw=False, label=label,
                                full=True)
 
-def main_ml_call(num_bins = 10, smote = False, method = "ML",raw=False,is_soft_label = False,all_labels = [],label = 'default'):
-
-    #############################
-    #Extract columns of interest, remove NA, and add patient ID and CNC bin
-    filtered_dataset = Clean_Data(debug=False,all_labels=all_labels)
-    left_right_data = Create_Left_Right_Data(filtered_dataset,debug=False)
-    if raw == True:
-        X_train, X_test, y_train,y_test,groups_train = Train_Test_Split(left_right_data, debug=False,raw=True)
-        if method == "ML":
-            #Run grid search on the split data **for regressor**
-
-            if is_soft_label:
-                y_train_soft = soft_label(y_train)
-                x = np.linspace(0,1,len(y_train_soft))
-                plt.scatter(x,y_train_soft)
-                plt.show()
-                y_test_soft = soft_label(y_test)
-
-                # # Hard binary label for evaluation only
-                # y_train_binary = (y_train <= 40).astype(int)
-                # y_test_binary = (y_test <= 40).astype(int)
-                grid_search = Optimize_Model(X_train, y_train_soft, groups_train, debug=False, raw=True,soft_label=is_soft_label,pkl_name=label)
-
-            else:
-                # grid_search = Optimize_Model(X_train, y_train, groups_train, debug=True, raw=True)
-
-                with open(f'{label}.pkl', 'rb') as f:
-                    grid_search = pickle.load(f)
-
-                #Make y_train and y_test binary now
-                y_train_binary = (y_train <=40).astype(int) #A series of 0/1
-                y_test_binary = (y_test <=40).astype(int)
-
-                best_model = grid_search.best_estimator_
-                print(best_model)
-                y_pred = best_model.predict(X_train)
-
-
-
-
-
-                # run_visualizations(grid_search, X_test, y_test,bin_threshold=fifty_threshold)
-
-            #
-            # y_pred = grid_search.best_estimator_.predict(X_test)
-            # model_name = grid_search.best_estimator_.named_steps['classifier'].__class__.__name__
-
-
-
-    if raw == False:
-        binned_data,fifty_threshold = Add_Categorical_Bins(left_right_data,num_bins=10,debug=False)
-        print(binned_data.head)
-    # Split into train/test while preserving which patient is in each group
-        X_train, X_test, y_train,y_test,groups_train = Train_Test_Split(binned_data, debug=False,raw=False)
-
-        if smote:
-            #Equal *spaced* bins with SMOTE applied
-            smote = SMOTE(sampling_strategy="auto", random_state=42)
-            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-            # plt.hist(y_train_resampled, edgecolor='black', alpha=0.7)
-            # Extend `groups_train` to match SMOTE's new sample count
-            num_new_samples = len(X_train_resampled) - len(X_train)
-            # Assign synthetic samples a placeholder group (-1)
-            groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
-            X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
-
-        if method == "ML":
-            print(f"Method chosen is ML, raw = {raw}")
-            #Run grid search on the split data **for multicategorical classifier**
-            # grid_search = Optimize_Model(X_train,y_train,groups_train,debug=False,pkl_name=label)
-            grid_search = Optimize_Model_Repeated_Iters(X_train,y_train,groups_train,debug=False,pkl_name=label)
-            # with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
-            #     grid_search = pickle.load(f)
-
-
-            # #Sanity check our best model with a confusion matrix on X_test
-            # y_pred = grid_search.best_estimator_.predict(X_test)
-            # model_name = grid_search.best_estimator_.named_steps['classifier'].__class__.__name__
-            # fig, ax = plt.subplots(figsize=(6, 5))
-            # ConfusionMatrixDisplay.from_predictions(y_test, y_pred, ax=ax)
-            # ax.set_title(f"Best Model ({model_name}) on Test Data for {label}")
-            # plt.savefig(f"cm-{label}")
-            # plt.close('all')
-            # plt.show()
-
-
-            # run_visualizations(grid_search,X_train,y_train, X_test, y_test,bin_threshold=fifty_threshold,label=label)
-        if method == "60/60":
-            # Get predictions
-            y_pred = sixty_sixty_predictions(X_test)
-            y_true_binary = (y_test <= 7).astype(int)
-
-            # Accuracy
-            accuracy = accuracy_score(y_true_binary, y_pred)
-            print(f"Accuracy: {accuracy:.2f}")
-
-            # Confusion Matrix
-            conf_matrix = confusion_matrix(y_true_binary, y_pred)
-
-            conf_matrix = ((conf_matrix/len(y_pred) ) * 100).astype(int)
-            print("Confusion Matrix:")
-            print(conf_matrix)
-            labels = np.array([["{:.1f}%".format(val) for val in row] for row in conf_matrix])
-
-            # Plot confusion matrix
-            plt.figure(figsize=(6, 5))
-            sns.heatmap(conf_matrix, annot=labels, fmt="", cmap="Blues", cbar=False,
-                        xticklabels=["Predicted Non-Candidate", "Predicted Candidate"],
-                        yticklabels=["Actual Non-Candidate", "Actual Candidate"])
-            plt.xlabel("Prediction")
-            plt.ylabel("Actual")
-            plt.title("Confusion Matrix")
-            plt.tight_layout()
-            plt.show()
-            y_true_binary = y_true_binary.values.tolist()
-            print(y_true_binary)
-            print(y_pred)
-            tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred).ravel()
-            precision = precision_score(y_true_binary, y_pred, zero_division=0)
-            recall = recall_score(y_true_binary, y_pred, zero_division=0)
-            f1 = f1_score(y_true_binary, y_pred, zero_division=0)
-            sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
-            specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
-            print(f"Precision: {precision}, Recall: {recall}, F1: {recall}, Sensitivity:{sensitivity}, Specificity: {specificity}")
 
 
 
@@ -1120,20 +859,19 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
 
 if __name__ == '__main__':
     # different_variables_run()
-    # sixty_sixty_run()
-    # PyCaret_Run_Binary()
-    # different_variables_run(full=True)
-    # Post_Iter_Processing()
+    # sixty_sixty_run()  #Run this to get 60/60 CM and information
     # Demographics_Table()
-    all_labels =  [
-        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
-    ]
-    nested_cross_optimize(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels,raw_preds=True)
+    # all_labels =  [
+    #     'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+    #     'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+    #     'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+    #     'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+    #     'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+    #     'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
+    # ]
+    # nested_cross_optimize(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels,raw_preds=True)
+    # Post_Iter_Processing()
+
 
 
 
