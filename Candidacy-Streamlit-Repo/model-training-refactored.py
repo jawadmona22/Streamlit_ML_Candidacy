@@ -1,5 +1,5 @@
 import pandas as pd
-from sklearn.model_selection import GroupKFold,GridSearchCV,GroupShuffleSplit
+from sklearn.model_selection import GroupKFold,GridSearchCV,GroupShuffleSplit,ParameterGrid,KFold
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 import pickle
@@ -22,6 +22,11 @@ from sklearn.metrics import accuracy_score
 import seaborn as sns
 from pycaret.classification import setup, compare_models, pull
 from pycaret.classification import *
+from pathlib import Path
+import joblib
+from scipy.stats import t
+from sklearn import preprocessing
+
 
 def Clean_Data(debug=False,all_labels=[]): #This function extracts the columns of interest, removes NA, and adds patient ID
     full_dataset = pd.read_csv("candidacy_v3.csv")
@@ -29,9 +34,9 @@ def Clean_Data(debug=False,all_labels=[]): #This function extracts the columns o
     if 'Age' in full_dataset.columns:
         # Calculate median age (ignores NaNs by default)
         median_age = full_dataset["Age"].median()
-        print("Missing before:", full_dataset["Age"].isna().sum())
+        # print("Missing before:", full_dataset["Age"].isna().sum())
         full_dataset["Age"].fillna(median_age, inplace=True)
-        print("Missing after:", full_dataset["Age"].isna().sum())
+        # print("Missing after:", full_dataset["Age"].isna().sum())
 
     if 'HLdur_R' and 'HLdur_L' in full_dataset.columns:
         # First for right
@@ -60,12 +65,10 @@ def Clean_Data(debug=False,all_labels=[]): #This function extracts the columns o
 
     #Need to keep everything together to prevent loss of data
     filtered_dataset = full_dataset[all_labels].dropna()
-    print(filtered_dataset.columns)
     filtered_dataset['patient_id'] = range(1, len(filtered_dataset) + 1)
-    print("Filtered Shape", filtered_dataset.shape)
-    if debug:
-        print(f"Filtered Dataset: {filtered_dataset.head}")
-        print(f"Filtered Columns: {filtered_dataset.columns}")
+    # if debug:
+        # print(f"Filtered Dataset: {filtered_dataset.head}")
+        # print(f"Filtered Columns: {filtered_dataset.columns}")
 
 
     return filtered_dataset
@@ -174,12 +177,121 @@ def Train_Test_Split(binned_data,debug=False,raw=False):
         return X_train, X_test, y_train, y_test, groups_train
 
 
+def generate_repeated_group_kfold(X, y, groups, n_splits=10, n_repeats=100, random_state=42):
 
+    rng = np.random.RandomState(random_state)
+    unique_groups = np.unique(groups)
+    all_splits = []
+
+    for repeat in range(n_repeats):
+        # Shuffle the unique group labels
+        shuffled_groups = rng.permutation(unique_groups)
+
+        # Map each group to a new shuffled index
+        group_to_fold_index = {group: i for i, group in enumerate(shuffled_groups)}
+
+        # Apply that mapping to the full group array to change fold assignments
+        shuffled_group_labels = np.array([group_to_fold_index[group] for group in groups])
+
+        # Create a new GroupKFold and generate splits using the shuffled labels
+        group_kfold = GroupKFold(n_splits=n_splits)
+        for train_idx, test_idx in group_kfold.split(X, y, groups=shuffled_group_labels):
+            all_splits.append((train_idx, test_idx))
+
+    return all_splits
+
+def Optimize_Model_Repeated_Iters(X,y,groups,debug=False,raw=False,soft_label=False,pkl_name = 'grid_search'):
+    # --- Classifier-specific hyperparameter grids ---
+    cv = generate_repeated_group_kfold(X,y,groups,n_splits=10,n_repeats=100,random_state=42)
+    model_configs = {
+        'RandomForest': {
+            'model': RandomForestClassifier(random_state=42),
+            'param_grid': {
+                'n_estimators': [100, 200],
+                'max_depth': [10, None]
+            }
+        },
+        'XGBoost': {
+            'model': XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42),
+            'param_grid': {
+                'n_estimators': [100, 200],
+                'max_depth': [3, 6],
+                'learning_rate': [0.1, 0.2]
+            }
+        },
+        'LogisticRegression': {
+            'model': LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000),
+            'param_grid': {
+                'penalty': ['l2']
+            }
+        }
+    }
+
+    # --- Store all results ---
+    all_predictions = []
+    # --- Loop over each classifier type ---
+    for model_name, config in tqdm(model_configs.items(), desc="Models", position=0):
+        base_model = config['model']
+        param_grid = config['param_grid']
+        model_predictions = []
+
+        print(f"\n🔍 Running grid search for {model_name}...")
+
+        for params in tqdm(ParameterGrid(param_grid), desc=f"{model_name} Grid", position=1, leave=False):
+            # print(f"  ➤ Params: {params}")
+            model = base_model.set_params(**params)
+            #K-fold loop
+            for fold_idx, (train_idx, test_idx) in tqdm(
+                    list(enumerate(cv)),
+                    total=len(cv),
+                    desc="Folds",
+                    position=2,
+                    leave=False
+            ):
+                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+                group_test = groups[test_idx]
+
+                # Train and predict
+                model.fit(X_train, y_train)
+                y_full = pd.concat([y_test,y_train],axis=0,ignore_index=True)
+                X_full = pd.concat([X_test, X_train], axis=0, ignore_index=True)
+
+                y_pred = model.predict(X_full)
+
+                # Predict probabilities
+                y_pred_proba = model.predict_proba(X_full)
+
+                pred_df = pd.DataFrame({
+                    'y_true': y_full.values,
+                    'y_pred': y_pred,
+                    # 'patient_id': group_test,
+                    'fold': fold_idx,
+                    'model': model_name,
+                    'params': [str(params)] * len(y_full),
+                })
+
+                proba_column = [row for row in y_pred_proba]  # Each row is a list of class probs
+
+                # Add to prediction DataFrame
+                pred_df["proba_vector"] = proba_column
+
+
+                all_predictions.append(pred_df)
+                model_predictions.append(pred_df)
+            intermediate_df = pd.concat(model_predictions, ignore_index=True)
+            intermediate_df.to_pickle(f"{model_name}_iters_{pkl_name}.pkl")
+
+            all_predictions.extend(model_predictions)
+            # --- Combine everything into one DataFrame ---
+    full_predictions = pd.concat(all_predictions, ignore_index=True)
+    full_predictions.to_pickle(f"All_Iter_Predictions_{pkl_name}.pkl")
 def Optimize_Model(X_train,y_train,groups_train,debug=False,raw=False,soft_label=False,pkl_name = 'grid_search'):
     '''This section will take the selected model in 'params' and train the model'''
 
-    kf = GroupKFold(n_splits=10)
-
+    # kf = GroupKFold(n_splits=10)
+    print(f"Shape of X: {X_train.shape}")
+    cv_splits = generate_repeated_group_kfold(X_train, y_train, groups=groups_train, n_splits=2, n_repeats=2)
 
     if raw == False: #Case: classification problem
         pipeline = Pipeline([
@@ -210,7 +322,7 @@ def Optimize_Model(X_train,y_train,groups_train,debug=False,raw=False,soft_label
             pipeline,
             param_grid=param_grid,
             scoring='f1_micro',
-            cv=kf,
+            cv=cv_splits,
             n_jobs=-1,
             verbose=3
         )
@@ -458,26 +570,26 @@ def different_variables_run(full=False):
     ##Run 1
 
     set_dict = {
-        "ag-only":
-        #Audiogram Only
-        [
-        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L', 'CNC_L', 'CNC_R'
-        ],
-        "wrs":
-        #audiogram + WRS
-        [
-        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        'WRS_L', 'WRS_R', 'CNC_L', 'CNC_R'
-        ],
-        "wrs-a":
+        # "ag-only-iters":
+        # #Audiogram Only
+        # [
+        # 'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        # 'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        # 'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        # 'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        # 'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L', 'CNC_L', 'CNC_R'
+        # ],
+        # "wrs":
+        # #audiogram + WRS
+        # [
+        # 'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        # 'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        # 'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        # 'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        # 'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        # 'WRS_L', 'WRS_R', 'CNC_L', 'CNC_R'
+        # ],
+        "wrs-a-iters":
 
         #Audiogram + WRS + Age
         [
@@ -488,28 +600,28 @@ def different_variables_run(full=False):
         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
         'WRS_L', 'WRS_R', 'Age','CNC_L', 'CNC_R'
         ],
-        "wrs-a-dhl":
-
-        # Audiogram + WRS + Age + HL Duration
-            [
-                'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-                'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-                'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-                'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-                'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-                'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R','CNC_L', 'CNC_R'
-            ],
-        "wrs-a-dhl-dha":
-        # Audiogram + WRS + Age + HL Duration + HA duration
-            [
-                'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-                'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-                'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-                'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-                'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-                'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R', 'Hearing_Aid_Use_Time_L',
-                'Hearing_Aid_Use_Time_R','CNC_L', 'CNC_R'
-            ]
+        # "wrs-a-dhl":
+        #
+        # # Audiogram + WRS + Age + HL Duration
+        #     [
+        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R','CNC_L', 'CNC_R'
+        #     ],
+        # "wrs-a-dhl-dha":
+        # # Audiogram + WRS + Age + HL Duration + HA duration
+        #     [
+        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R', 'Hearing_Aid_Use_Time_L',
+        #         'Hearing_Aid_Use_Time_R','CNC_L', 'CNC_R'
+        #     ]
 
     }
 
@@ -553,7 +665,7 @@ def visuals_with_full_set(all_labels,label):
     from pathlib import Path
     import joblib
 
-    folder = Path('ml-pkl-files')
+    folder = Path('feature-pkls')
 
     for pkl_file in folder.glob('*.pkl'):
         print(pkl_file.name[:-4])
@@ -638,7 +750,8 @@ def main_ml_call(num_bins = 10, smote = False, method = "ML",raw=False,is_soft_l
         if method == "ML":
             print(f"Method chosen is ML, raw = {raw}")
             #Run grid search on the split data **for multicategorical classifier**
-            grid_search = Optimize_Model(X_train,y_train,groups_train,debug=False,pkl_name=label)
+            # grid_search = Optimize_Model(X_train,y_train,groups_train,debug=False,pkl_name=label)
+            grid_search = Optimize_Model_Repeated_Iters(X_train,y_train,groups_train,debug=False,pkl_name=label)
             # with open('best_grid_search_10_bins_smote.pkl', 'rb') as f:
             #     grid_search = pickle.load(f)
 
@@ -654,7 +767,7 @@ def main_ml_call(num_bins = 10, smote = False, method = "ML",raw=False,is_soft_l
             # plt.show()
 
 
-            run_visualizations(grid_search,X_train,y_train, X_test, y_test,bin_threshold=fifty_threshold,label=label)
+            # run_visualizations(grid_search,X_train,y_train, X_test, y_test,bin_threshold=fifty_threshold,label=label)
         if method == "60/60":
             # Get predictions
             y_pred = sixty_sixty_predictions(X_test)
@@ -696,304 +809,311 @@ def main_ml_call(num_bins = 10, smote = False, method = "ML",raw=False,is_soft_l
 
 
 
-def evaluate_feature_sets_with_pycaret(X_train, y_train, X_test, y_test, groups_train, feature_sets,binary_labels=False):
-    results = []
+def Post_Iter_Processing():
+    # Load the combined predictions
 
-    X_train = X_train.reset_index(drop=True)
-    y_train = y_train.reset_index(drop=True)
-    X_test = X_test.reset_index(drop=True)
-    y_test = y_test.reset_index(drop=True)
-    groups_train = pd.Series(groups_train).reset_index(drop=True)
 
-    for i, features in enumerate(feature_sets):
-        print(f"\n📂 Evaluating Feature Set {i + 1} ({len(features)} features)")
-        print(features)
+    folder = Path('bins-pkls')
+    iter_info = []
+    for pkl_file in folder.glob('*.pkl'):
+        print(f"Loading: {pkl_file.name}")
+        df = pd.read_pickle(f"bins-pkls/{pkl_file.name}")
+        print(df['BestParams'])
+        ModelName = df['ModelName'][0]
+        if ModelName == 'XGClassifer':
+            ModelName = 'XGBoostClassifier'
 
-        df = X_train[features].copy()
-        df['target'] = y_train
+        # --- Aggregate across folds ---
+        summary = df.groupby(['ModelName']).agg(
+            f1_mean=('F1', 'mean'),
+            f1_std=('F1', 'std'),
+            auc_mean=('AUC', 'mean'),
+            auc_std=('AUC', 'std'),
+            n_folds=('AUC', 'count')
+        ).reset_index()
 
-        # Setup
-        setup(
-            data=df,
-            target='target',
-            fold_strategy=GroupKFold(n_splits=10),
-            fold_groups=groups_train,
-            session_id=42,
-            normalize=True,
-            fold=10,
-            verbose=False,
-            html=False,
-            log_experiment=False
+        # --- Compute 95% confidence intervals ---
+        summary['f1_95ci'] = t.ppf(0.975, summary['n_folds'] - 1) * summary['f1_std'] / np.sqrt(summary['n_folds'])
+        summary['auc_95ci'] = t.ppf(0.975, summary['n_folds'] - 1) * summary['auc_std'] / np.sqrt(summary['n_folds'])
+
+        # --- Sort by AUC or F1 as needed ---
+        summary_sorted = summary.sort_values('auc_mean', ascending=False)
+
+        # --- Display summary ---
+        first_row = \
+        summary_sorted[['ModelName', 'f1_mean', 'f1_std', 'f1_95ci', 'auc_mean', 'auc_std', 'auc_95ci']].iloc[:3]
+        iter_info.append(summary_sorted.copy())
+        # Print the full first row as a readable string
+        print("\n Best Model Summary (Top Row):")
+        print(first_row.to_string())
+
+
+        # Sum all values
+        totals = df[['tp', 'tn', 'fp', 'fn']].sum()
+        tp, tn, fp, fn = totals['tp'], totals['tn'], totals['fp'], totals['fn']
+
+        # Confusion matrix: actual rows, predicted columns
+        conf_matrix = np.array([[tn, fp],
+                                [fn, tp]])
+
+        # Convert to percent
+        total = conf_matrix.sum()
+        percent_matrix = conf_matrix / total * 100
+        percent_matrix = np.round(percent_matrix, 1)
+
+        # Define annotations and custom colors
+        labels = np.array([
+            [f"{percent_matrix[0, 0]}%", f" {percent_matrix[0, 1]}%"],
+            [f"{percent_matrix[1, 0]}%", f" {percent_matrix[1, 1]}%"]
+        ])
+
+        # Custom color matrix: light red for FP/FN, green for TP/TN
+        colors = np.array([
+            ['#a8e6a1', '#f4cccc'],  # TN, FP
+            ['#f4cccc', '#a8e6a1']  # FN, TP
+        ])
+
+        # Plot with custom colored cells
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        for i in range(2):
+            for j in range(2):
+                ax.add_patch(plt.Rectangle((j, i), 1, 1, color=colors[i, j]))
+                ax.text(j + 0.5, i + 0.5, labels[i, j],
+                        ha='center', va='center', fontsize=12, fontweight='bold')
+
+        # Formatting
+        ax.set_xticks([0.5, 1.5])
+        ax.set_yticks([0.5, 1.5])
+        ax.set_xticklabels(['Predicted Non-Candidate', 'Predicted Candidate'])
+        ax.set_yticklabels(['Actual Non-Candidate', 'Actual Candidate'])
+        ax.set_xlim(0, 2)
+        ax.set_ylim(0, 2)
+        ax.invert_yaxis()
+        ax.set_title(f"{ModelName}", fontsize=14)
+        plt.grid(False)
+        plt.tight_layout()
+        plt.savefig(f'TRIO-figs/{ModelName}-cm.png')
+        # plt.show()
+
+    # summary_df = pd.concat(iter_info, ignore_index=True)
+    # print(summary_df.head())
+    # summary_df.to_excel("Sumamry_Iter.xlsx")
+
+
+
+
+def Demographics_Table():
+    df = pd.read_csv('candidacy_v3.csv')
+
+    # Columns to summarize
+    iqr_median = [
+        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R',
+        'Hearing_Aid_Use_Time_L', 'Hearing_Aid_Use_Time_R',
+        'CNC_L', 'CNC_R'
+    ]
+
+    category_percent = ['Gender', 'Race', 'Etiology_R', 'Etiology_L']
+
+    # Ensure numeric columns are numeric
+    df[iqr_median] = df[iqr_median].apply(pd.to_numeric, errors='coerce')
+
+    # Compute median and IQR
+    summary_stats = pd.DataFrame(columns=['Feature', 'Median', 'IQR', 'Missing'])
+
+    # categorical_stats = pd.DataFrame(columns = ['Feature'])
+
+    for col in iqr_median:
+        median = df[col].median()
+        q1 = df[col].quantile(0.25)
+        q3 = df[col].quantile(0.75)
+        iqr = str(q1) + '-' + str(q3)
+        missing = df[col].isna().sum()
+        summary_stats = summary_stats.append(
+            {'Feature': col, 'Median': median, 'IQR': iqr, 'Missing': missing},
+            ignore_index=True
         )
+    # Show numeric summaries
+    print("Median & IQR for numeric features:\n")
+    print(summary_stats)
+
+    # summary_stats.to_excel('summary-demographics.xlsx')
+
+    # Compute category percentages
+    print("\nCategory breakdowns:\n")
+    for col in category_percent:
+        print(f"--- {col} ---")
+        counts = df[col].value_counts(dropna=False)
+        percent = df[col].value_counts(normalize=True, dropna=False) * 100
+        print(percent.round(2).astype(str))
+        print(counts)
 
 
 
-        # 🔁 Custom Tuning
-        tuned_models = []
-
-        # Random Forest
-        rf_grid = {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5, 10]
-        }
-        rf = create_model('rf')
-        tuned_rf = tune_model(rf, custom_grid=rf_grid, search_library='scikit-learn',
-                              search_algorithm='grid', optimize='f1')
-        tuned_models.append(tuned_rf)
-
-        # XGBoost
-        xgb_grid = {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [3, 6, 10],
-            'learning_rate': [0.01, 0.1, 0.2]
-        }
-        xgb = create_model('xgboost')
-        tuned_xgb = tune_model(xgb, custom_grid=xgb_grid, search_library='scikit-learn',
-                               search_algorithm='grid', optimize='f1')
-        tuned_models.append(tuned_xgb)
-
-        # Logistic Regression (untuned)
-        lr = create_model('lr')
-        tuned_models.append(lr)
-
-        for model in tuned_models:
-
-            if binary_labels:
-                # plot_model(model, plot='confusion_matrix')
-                # plot_model(model, plot='auc')
-
-                name = model.__class__.__name__
-                X_test_subset = X_test[features]
-                print(f"X test contains: {X_test_subset.columns}")
-                # Predict on test set
-                y_pred = model.predict(X_test_subset)
-
-                # Compute metrics
-                f1 = f1_score(y_true=y_test, y_pred=y_pred)
-                acc = accuracy_score(y_test, y_pred)
-                prec = precision_score(y_test, y_pred)
-                recall = recall_score(y_test, y_pred)
-
-                #ROC Calculation
-                fpr,tpr, tpr_lower, tpr_upper = bootstrap_roc_auc(y_test,y_pred)
-                roc_auc = auc(fpr, tpr)
-
-                # Compute AUC for the lower bound of the TPR
-                auc_lower_bound = auc(fpr, tpr_lower)
-
-                # Compute AUC for the upper bound of the TPR
-                auc_upper_bound = auc(fpr, tpr_upper)
-
-                plt.figure()
-                # Plot the ROC curve
-                plt.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})")
-                plt.xlabel("False Positive Rate")
-                plt.ylabel("True Positive Rate")
-                # plt.title(f"ROC AUC Curve (Threshold = {bin_threshold})")
-                plt.legend()
-                plt.savefig(f"{label}-AUC.png")
-                print(f"{name} (on test): F1 = {f1}, Acc = {acc}, Prec = {prec}, Recall = {recall}")
-
-                results.append({
-                    'feature_set_index': i + 1,
-                    'model': name,
-                    'f1_score': f1,
-                    'accuracy': acc,
-                    'precision': prec,
-                    'recall': recall,
-                    'auc': roc_auc,
-                    'auc_lower_bound':auc_lower_bound,
-                    'auc_upper_bound':auc_upper_bound,
-                })
-
-                print(results)
-            if not binary_labels:
-                # plot_model(model, plot='confusion_matrix')
-                # plot_model(model, plot='auc')
-
-                name = model.__class__.__name__
-                X_test_subset = X_test[features]
-                print(f"X test contains: {X_test_subset.columns}")
-                # Predict on test set
-                y_pred = model.predict(X_test_subset)
-
-                # Compute metrics
-                f1 = f1_score(y_true=y_test, y_pred=y_pred)
-                acc = accuracy_score(y_test, y_pred)
-                prec = precision_score(y_test, y_pred)
-                recall = recall_score(y_test, y_pred)
-
-                #ROC Calculation
-                fpr,tpr, tpr_lower, tpr_upper = bootstrap_roc_auc(y_test,y_pred)
-                roc_auc = auc(fpr, tpr)
-
-                # Compute AUC for the lower bound of the TPR
-                auc_lower_bound = auc(fpr, tpr_lower)
-
-                # Compute AUC for the upper bound of the TPR
-                auc_upper_bound = auc(fpr, tpr_upper)
-
-                plt.figure()
-                # Plot the ROC curve
-                plt.plot(fpr, tpr, label=f"{name} (AUC = {roc_auc:.3f})")
-                plt.xlabel("False Positive Rate")
-                plt.ylabel("True Positive Rate")
-                # plt.title(f"ROC AUC Curve (Threshold = {bin_threshold})")
-                plt.legend()
-                # plt.savefig(f"{label}-AUC.png")
-                print(f"{name} (on test): F1 = {f1}, Acc = {acc}, Prec = {prec}, Recall = {recall}")
-
-                results.append({
-                    'feature_set_index': i + 1,
-                    'model': name,
-                    'f1_score': f1,
-                    'accuracy': acc,
-                    'precision': prec,
-                    'recall': recall,
-                    'auc': roc_auc,
-                    'auc_lower_bound':auc_lower_bound,
-                    'auc_upper_bound':auc_upper_bound,
-                })
-
-                print(results)
 
 
-    results_df = pd.DataFrame(results)
-    results_df.to_excel('binary_model_comparison.xlsx')
 
-    return pd.DataFrame(results)
+def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_preds=False,smote=False):
 
-def PyCaret_Run_Binary():
-    all_labels =  [
-            'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-            'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-            'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-            'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-            'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-            'WRS_L', 'WRS_R', 'Age', 'HLdur_R', 'HLdur_L','Hearing_Aid_Use_Time_R','Hearing_Aid_Use_Time_L',
-            'CNC_L','CNC_R'
-        ]
+    if smote:
+        pipeline = Pipeline([
+        ('smote', SMOTE(random_state=42)),
+        ('scaler', preprocessing.StandardScaler()),  # Step 1: Scale features
+        ('classifier', RandomForestClassifier(random_state=42))  # Step 2: Train classifier
+        ])
+    else:
+       pipeline = Pipeline([
+           ('scaler', preprocessing.StandardScaler()),  # Step 1: Scale features
+           ('classifier', RandomForestClassifier(random_state=42))  # Step 2: Train classifier
+       ])
+
+
+
+    # Define parameter grids for different classifiers
+
+    scoring = 'f1_micro'
+    param_grid = {
+        'RandomForestClassifier':[
+        {  # Random Forest
+            'classifier': [RandomForestClassifier(random_state=42)],
+            'classifier__max_depth': [10, 20],
+            'classifier__min_samples_split': [2, 5]
+        }],
+        'XGClassifer':
+        [{  # XGBoost
+            'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
+            'classifier__max_depth': [3, 6],
+            'classifier__learning_rate': [0.01, 0.1]
+        }],
+        'LogisticRegression':
+        [{  # Vanilla Logistic Regression (no hyperparameter tuning)
+            'classifier': [LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)]
+            # No hyperparameters specified
+        }]
+    }
+
+    outer_cv = GroupKFold(n_splits=k_outer)
+    inner_cv = KFold(n_splits=k_inner, shuffle=True, random_state=1)
     filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
     left_right_data = Create_Left_Right_Data(filtered_dataset, debug=False)
-    # binned_data, fifty_threshold = Add_Categorical_Bins(left_right_data, num_bins=10, debug=False)
-    # Split into train/test while preserving which patient is in each group
-    X_train, X_test, y_train, y_test, groups_train = Train_Test_Split(left_right_data, debug=False, raw=True)
-    y_train = (y_train <= 40).astype(int)
-    y_test = (y_test <= 40).astype(int)
-    print("Finished preprocessing data")
-    #SMOTE#
-    # # Equal *spaced* bins with SMOTE applied
-    # smote = SMOTE(sampling_strategy="auto", random_state=42)
-    # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-    # plt.hist(y_train_resampled, edgecolor='black', alpha=0.7)
-    # # Extend `groups_train` to match SMOTE's new sample count
-    # num_new_samples = len(X_train_resampled) - len(X_train)
-    # # Assign synthetic samples a placeholder group (-1)
-    # groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
-    # X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
+    if not raw_preds:
+        binned_data, fifty_threshold = Add_Categorical_Bins(left_right_data, num_bins=10, debug=False)
+        X = binned_data.drop(columns=['CNC_bin', 'CNC', 'patient_id'])
+        y = binned_data['CNC_bin']
+        groups = binned_data['patient_id'].values
 
-    feature_sets = [
-        # Audiogram Only
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000'
-        ],
+    else:
+        X = left_right_data.drop(columns=['CNC','patient_id'])
+        y = left_right_data['CNC']
+        y = (y < 50).astype(int)
+        groups = left_right_data['patient_id'].values
 
-        # Audiogram + WRS
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS'
-        ],
-        # Audiogram + WRS + Age
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age'
-        ],
 
-        # Audiogram + WRS + Age + HL Duration
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age', 'HLdur'
-        ],
 
-        # Audiogram + WRS + Age + HL Duration + HA duration
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age', 'HLdur', 'Hearing_Aid_Use_Time'
-        ]
-    ]
+    for model_name, param_subset in param_grid.items():
+        print(f"Running procedure for {model_name}")
 
-    evaluate_feature_sets_with_pycaret(X_train, y_train, X_test,y_test,groups_train, feature_sets,binary_labels=True)
 
-def PyCaret_Run_Bins():
-    all_labels =  [
-            'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-            'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-            'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-            'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-            'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-            'WRS_L', 'WRS_R', 'Age', 'HLdur_R', 'HLdur_L','Hearing_Aid_Use_Time_R','Hearing_Aid_Use_Time_L',
-            'CNC_L','CNC_R'
-        ]
-    filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
-    left_right_data = Create_Left_Right_Data(filtered_dataset, debug=False)
-    binned_data, fifty_threshold = Add_Categorical_Bins(left_right_data, num_bins=10, debug=False)
-    # Split into train/test while preserving which patient is in each group
-    X_train, X_test, y_train, y_test, groups_train = Train_Test_Split(binned_data, debug=False, raw=True)
-    print("Finished preprocessing data")
-    #SMOTE#
-    # Equal *spaced* bins with SMOTE applied
-    smote = SMOTE(sampling_strategy="auto", random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-    plt.hist(y_train_resampled, edgecolor='black', alpha=0.7)
-    # Extend `groups_train` to match SMOTE's new sample count
-    num_new_samples = len(X_train_resampled) - len(X_train)
-    # Assign synthetic samples a placeholder group (-1)
-    groups_resampled = np.concatenate([groups_train, np.full(num_new_samples, -1)])
-    X_train, y_train, groups_train = X_train_resampled, y_train_resampled, groups_resampled
+        iter_results = []
+        for iter in tqdm(range(0,n_iters)):
 
-    feature_sets = [
-        # Audiogram Only
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000'
-        ],
+            for fold, (train_idx, test_idx) in enumerate(outer_cv.split(X, y, groups=groups)):
+                print(f"Iteration {iter}, fold {fold}")
 
-        # Audiogram + WRS
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS'
-        ],
+                X_train = X.iloc[train_idx]
+                X_test = X.iloc[test_idx]
 
-        # Audiogram + WRS + Age
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age'
-        ],
+                y_train = y.iloc[train_idx]
+                y_test = y.iloc[test_idx]
 
-        # Audiogram + WRS + Age + HL Duration
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age', 'HLdur'
-        ],
+                groups_train = groups[train_idx]
 
-        # Audiogram + WRS + Age + HL Duration + HA duration
-        [
-            'hz125', 'hz250', 'hz500', 'hz750', 'hz1000', 'hz1500',
-            'hz2000', 'hz3000', 'hz4000', 'hz6000', 'hz8000',
-            'WRS', 'Age', 'HLdur', 'Hearing_Aid_Use_Time'
-        ]
-    ]
+                # Inner loop GridSearch
+                clf = GridSearchCV(
+                    pipeline,
+                    param_grid=param_subset,
+                    scoring=scoring,
+                    cv=inner_cv,
+                    n_jobs=-1,
+                    verbose=3
+                )
+                clf.fit(X_train, y_train, groups=groups_train)
 
-    evaluate_feature_sets_with_pycaret(X_train, y_train, X_test,y_test,groups_train, feature_sets)
+                #"Best model" is now the best estimator for the outer fold
+                best_model = clf.best_estimator_
+                y_pred = best_model.predict(X_test)
+                y_pred_prob = best_model.predict_proba(X_test)
+
+                #Make Binary
+                if not raw_preds:
+                    y_true_binary = (y_test <= 6).astype(int)
+                    y_pred_binary = (y_pred <= 6).astype(int)
+
+                    pred_prob_below_thresh = y_pred_prob[:, :7].sum(axis=1)
+                    y_pred_prob_binary = (pred_prob_below_thresh >= 0.5).astype(
+                        int)  # We classify as "1" if the summed probability is >=.5
+                if raw_preds: #Already binarized
+                    y_true_binary = y_test
+                    y_pred_binary = y_pred
+                    y_pred_prob_binary = y_pred_prob[:, 1]
+
+                #Compute Metrics for the fold
+                fpr, tpr, _ = roc_curve(y_true_binary, y_pred_prob_binary)
+                roc_auc = auc(fpr, tpr)
+
+                # Metrics: Binarize
+                f1 = f1_score(y_true_binary, y_pred_binary, average='macro')
+
+
+                tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred_binary).ravel()
+                precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+                recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+                sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
+                specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
+
+                #Append to the larger list, which is faster than appending dfs
+                new_row = {
+                    'ModelName': model_name,
+                    'BestParams': clf.best_params_,  # dict of best hyperparameters found
+                    'Iter': iter,
+                    'Fold': fold + 1,
+                    'AUC': roc_auc,
+                    'F1': f1,
+                    'Sensitivity': sensitivity,
+                    'Specificity': specificity,
+                    'Precision': precision,
+                    'Recall': recall,
+                    'tp':tp,
+                    'tn':tn,
+                    'fp':fp,
+                    'fn':fn,
+                    'y_pred': y_pred,
+                    'y_pred_proba': y_pred_prob
+
+                }
+                print(new_row)
+                iter_results.append(new_row)
+
+
+
+        all_iter_results = pd.DataFrame(iter_results)
+
+        all_iter_results.to_pickle(f'{model_name}_nested_raw2bi.pkl')
+
+        print(all_iter_results.head())
+
+        print(f"Shape of final dataframe: {all_iter_results.shape}")
+
+
+
+
+
+
 
 
 
@@ -1002,5 +1122,22 @@ if __name__ == '__main__':
     # different_variables_run()
     # sixty_sixty_run()
     # PyCaret_Run_Binary()
-    different_variables_run(full=True)
+    # different_variables_run(full=True)
+    # Post_Iter_Processing()
+    # Demographics_Table()
+    all_labels =  [
+        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
+    ]
+    nested_cross_optimize(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels,raw_preds=True)
+
+
+
+
+
+
 
