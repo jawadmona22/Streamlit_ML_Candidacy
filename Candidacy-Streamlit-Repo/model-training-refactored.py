@@ -194,85 +194,7 @@ def sixty_sixty_predictions(X_test):
 
 
 
-def different_variables_run(full=False):
-    ##Run 1
 
-    set_dict = {
-        # "ag-only-iters":
-        # #Audiogram Only
-        # [
-        # 'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        # 'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        # 'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        # 'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        # 'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L', 'CNC_L', 'CNC_R'
-        # ],
-        # "wrs":
-        # #audiogram + WRS
-        # [
-        # 'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        # 'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        # 'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        # 'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        # 'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        # 'WRS_L', 'WRS_R', 'CNC_L', 'CNC_R'
-        # ],
-        "wrs-a-iters":
-
-        #Audiogram + WRS + Age
-        [
-        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        'WRS_L', 'WRS_R', 'Age','CNC_L', 'CNC_R'
-        ],
-        # "wrs-a-dhl":
-        #
-        # # Audiogram + WRS + Age + HL Duration
-        #     [
-        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R','CNC_L', 'CNC_R'
-        #     ],
-        # "wrs-a-dhl-dha":
-        # # Audiogram + WRS + Age + HL Duration + HA duration
-        #     [
-        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
-        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
-        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
-        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
-        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
-        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R', 'Hearing_Aid_Use_Time_L',
-        #         'Hearing_Aid_Use_Time_R','CNC_L', 'CNC_R'
-        #     ]
-
-    }
-
-
-    if not full:
-        for key, value in tqdm(set_dict.items(), desc="Processing sets"):
-            label = key
-            all_labels = value
-            main_ml_call(
-                num_bins=10,
-                smote=False,
-                method="ML",
-                raw=False,
-                is_soft_label=False,
-                all_labels=all_labels,
-                label=label
-            )
-
-    if full:
-        for key, value in tqdm(set_dict.items(), desc="Processing sets"):
-            label = key
-            all_labels = value
-            visuals_with_full_set(all_labels,label)
 
 
 def sixty_sixty_run():
@@ -830,17 +752,7 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
 
 
 
-
-
-
-
-
-
-
-if __name__ == '__main__':
-    # different_variables_run()
-    # sixty_sixty_run()  #Run this to get 60/60 CM and information
-    # Demographics_Table() #Run this to get demographics information
+def key_set_optimization():
     all_labels =  [
         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
@@ -849,82 +761,75 @@ if __name__ == '__main__':
         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
-    #
-    # nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=False,file_name='reg',folder_name='bins-pkls')
-    # nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=True,file_name='smote',folder_name='bins-pkls')
-    # nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=False,file_name='reg',folder_name='binary-pkls')
-    # nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=True,file_name='smote',folder_name='binary-pkls')
+
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=False,file_name='reg',folder_name='bins-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=True,file_name='smote',folder_name='bins-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=False,file_name='reg',folder_name='binary-pkls')
+    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=True,file_name='smote',folder_name='binary-pkls')
     Post_Iter_Processing(folder_name='bins-pkls/SMOTE')
     Post_Iter_Processing(folder_name='bins-pkls/No-SMOTE')
     Post_Iter_Processing(folder_name='binary-pkls/SMOTE')
     Post_Iter_Processing(folder_name='binary-pkls/No-Smote')
+def feature_set_optimize():
+    set_dict = {
+        # "wrs":
+        # #audiogram + WRS
+        # [
+        # 'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        # 'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        # 'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        # 'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        # 'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        # 'WRS_L', 'WRS_R', 'CNC_L', 'CNC_R'
+        # ],
+        "wrs-a":
+        #
+        # Audiogram + WRS + Age
+            [
+                'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+                'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+                'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+                'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+                'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+                'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
+            ],
+        # "wrs-a-dhl":
+
+        # # Audiogram + WRS + Age + HL Duration
+        #     [
+        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R','CNC_L', 'CNC_R'
+        #     ],
+        # "wrs-a-dhl-dha":
+        # # Audiogram + WRS + Age + HL Duration + HA duration
+        #     [
+        #         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        #         'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        #         'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        #         'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        #         'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        #         'WRS_L', 'WRS_R', 'Age', 'HLdur_L', 'HLdur_R', 'Hearing_Aid_Use_Time_L',
+        #         'Hearing_Aid_Use_Time_R','CNC_L', 'CNC_R'
+        #     ]
+
+    }
+
+    # for key, value in set_dict.items():
+    #     nested_cross_optimize(n_iters=1, k_outer=10, k_inner=10, all_labels=value,raw_preds=False,smote=False,file_name=key,folder_name='feature-selection-pkls')
+    for key, value in set_dict.items():
+        Post_Iter_Processing(folder_name=f'feature-selection-pkls/{key}')
+
+
+if __name__ == '__main__':
+    # sixty_sixty_run()  #Run this to get 60/60 CM and information
+    # Demographics_Table() #Run this to get demographics information
+    feature_set_optimize()
 
 
 
 
 
-
-
-# ##Calibration curves
-#     # plt.figure(figsize=(8, 6))
-#
-#     # Set up subplot grid
-#     num_models = len(best_models)
-#     ncols = 2
-#     nrows = (num_models + 1) // ncols  # Round up for uneven count
-#     fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 4 * nrows))
-#     axes = axes.flatten()  # Flatten to index easily
-#
-#     for idx, (model_name, model_info) in enumerate(best_models.items()):
-#         ax = axes[idx]
-#         best_model = model_info['model']
-#         print(f"Running model: {model_name}")
-#
-#         y_true_binary = (y_test <= bin_threshold).astype(int)
-#         y_pred_prob = best_model.predict_proba(X_test)
-#         pred_prob_below_thresh = y_pred_prob[:, :bin_threshold].sum(axis=1)
-#         print("pred proba:",pred_prob_below_thresh)
-#         for i in range(len(pred_prob_below_thresh)):
-#             if pred_prob_below_thresh[i] >= 1:
-#                 pred_prob_below_thresh[i] = 1
-#
-#         fraction_of_positives, mean_predicted_value = calibration_curve(
-#             y_true_binary, pred_prob_below_thresh, n_bins=10
-#         )
-#
-#         # Plot calibration curve
-#         ax.plot(mean_predicted_value, fraction_of_positives, marker='o', label='Calibration Curve')
-#
-#         # Plot histogram for RandomForest
-#         # if "Random" in model_name:
-#         counts, bins = np.histogram(pred_prob_below_thresh, bins=10, range=(0, 1))
-#         proportions = counts / counts.sum()
-#         bin_centers = 0.5 * (bins[:-1] + bins[1:])
-#         bin_width = bins[1] - bins[0]
-#         bars = ax.bar(bin_centers, proportions, width=bin_width, alpha=0.5, label='Pred Prob Histogram')
-#         ax.set_ylim(0, 1)
-#         # Add percent text on top of each bar
-#         for i, bar in enumerate(bars):
-#             percent = proportions[i] * 100
-#             if percent > 0:
-#                 ax.text(bar.get_x() + bar.get_width() / 2,
-#                         bar.get_height() + 0.02,  # position just above bar
-#                         f"{percent:.1f}%",  # 1 decimal place
-#                         ha='center', va='bottom', fontsize=10)
-#         # Perfect calibration line
-#         ax.plot([0, 1], [0, 1], 'k--', label='Perfectly Calibrated')
-#
-#         ax.set_title(f"{model_name} Calibration")
-#         ax.set_xlabel("Mean Predicted Probability")
-#         ax.set_ylabel("Fraction of Positives")
-#         # ax.legend(loc='best')
-#         ax.grid(True)
-#
-#     # Hide any unused subplots
-#     for j in range(idx + 1, len(axes)):
-#         fig.delaxes(axes[j])
-#
-#     plt.tight_layout()
-#     plt.savefig(f"{label}-cal.png")
-#     # plt.show()
-#
