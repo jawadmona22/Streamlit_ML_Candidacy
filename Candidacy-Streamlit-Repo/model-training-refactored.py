@@ -192,11 +192,6 @@ def sixty_sixty_predictions(X_test):
 
 
 
-
-
-
-
-
 def sixty_sixty_run():
     all_labels = [
         'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
@@ -267,29 +262,6 @@ def sixty_sixty_run():
     specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
     print(
         f"Precision: {precision}, Recall: {recall}, F1: {f1}, Sensitivity:{sensitivity}, Specificity: {specificity}")
-
-
-def visuals_with_full_set(all_labels,label):
-    from pathlib import Path
-    import joblib
-
-    folder = Path('feature-pkls')
-
-    for pkl_file in folder.glob('*.pkl'):
-        print(pkl_file.name[:-4])
-        if pkl_file.name[:-4] == label:
-            print(f"Loading: {pkl_file}")
-            grid_search = joblib.load(pkl_file)
-            filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
-            left_right_data = Create_Left_Right_Data(filtered_dataset, debug=False)
-            binned_data, fifty_threshold = Add_Categorical_Bins(left_right_data, num_bins=10, debug=False)
-            # Split into train/test while preserving which patient is in each group
-            X_train, X_test, y_train, y_test, groups_train = Train_Test_Split(binned_data, debug=False, raw=False)
-            label = pkl_file.name + "-full"
-            run_visualizations(grid_search, X_train, y_train, X_test, y_test, 7, raw=False, label=label,
-                               full=True)
-
-
 
 
 
@@ -396,7 +368,7 @@ def Post_Iter_Processing(folder_name = ''):
         ax.set_title(f"{ModelName}", fontsize=14)
         plt.grid(False)
         plt.tight_layout()
-        plt.savefig(f'TRIO-figs/{ModelName}{suffix}-{root_folder}-cm.png')
+        plt.savefig(f'{folder_name}/{ModelName}{suffix}-{root_folder}-cm.png')
         plt.close(fig_1)
 
         # ---- Compute Calibration Curve: All Folds, Each Model ---- #
@@ -592,9 +564,7 @@ def Demographics_Table():
 
 
 
-
-
-def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_preds=False,smote=False,file_name='',folder_name=''):
+def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_labels=[], raw_preds=False, smote=False, file_name='', folder_name='', target='CNC'):
 
     if smote:
         pipeline = Pipeline([
@@ -637,6 +607,7 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
     inner_cv = KFold(n_splits=k_inner, shuffle=True, random_state=1)
     filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
     left_right_data = Create_Left_Right_Data(filtered_dataset, debug=False)
+
     if not raw_preds:
         binned_data, fifty_threshold = Add_Categorical_Bins(left_right_data, num_bins=10, debug=False)
         X = binned_data.drop(columns=['CNC_bin', 'CNC', 'patient_id'])
@@ -644,8 +615,8 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
         groups = binned_data['patient_id'].values
 
     else:
-        X = left_right_data.drop(columns=['CNC','patient_id'])
-        y = left_right_data['CNC']
+        X = left_right_data.drop(columns=[f'{target}','patient_id'])
+        y = left_right_data[f'{target}']
         y = (y < 50).astype(int)
         groups = left_right_data['patient_id'].values
 
@@ -749,6 +720,146 @@ def nested_cross_optimize(n_iters=1,k_outer=10,k_inner=10,all_labels=[],raw_pred
         print(all_iter_results.head())
 
         print(f"Shape of final dataframe: {all_iter_results.shape}")
+def nested_cross_optimize_bilateral(n_iters=1, k_outer=10, k_inner=10, all_labels=[], smote=False, file_name='', folder_name='', target='AzBioQuiet_bi'):
+
+    if smote:
+        pipeline = Pipeline([
+        ('smote', SMOTE(random_state=42)),
+        ('scaler', preprocessing.StandardScaler()),  # Step 1: Scale features
+        ('classifier', RandomForestClassifier(random_state=42))  # Step 2: Train classifier
+        ])
+    else:
+       pipeline = Pipeline([
+           ('scaler', preprocessing.StandardScaler()),  # Step 1: Scale features
+           ('classifier', RandomForestClassifier(random_state=42))  # Step 2: Train classifier
+       ])
+
+
+
+    # Define parameter grids for different classifiers
+
+    scoring = 'f1_micro'
+    param_grid = {
+        'RandomForestClassifier':[
+        {  # Random Forest
+            'classifier': [RandomForestClassifier(random_state=42)],
+            'classifier__max_depth': [10, 20],
+            'classifier__min_samples_split': [2, 5]
+        }],
+        'XGClassifer':
+        [{  # XGBoost
+            'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
+            'classifier__max_depth': [3, 6],
+            'classifier__learning_rate': [0.01, 0.1]
+        }],
+        'LogisticRegression':
+        [{  # Vanilla Logistic Regression (no hyperparameter tuning)
+            'classifier': [LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)]
+            # No hyperparameters specified
+        }]
+    }
+
+    outer_cv = GroupKFold(n_splits=k_outer)
+    inner_cv = KFold(n_splits=k_inner, shuffle=True, random_state=1)
+    filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
+    X = filtered_dataset.drop(columns=[f'{target}','patient_id'])
+    y = filtered_dataset[f'{target}']
+    y = (y < 60).astype(int)   #60% for AzBio
+    groups = filtered_dataset['patient_id'].values
+
+
+
+    for model_name, param_subset in param_grid.items():
+        print(f"Running procedure for {model_name}")
+
+
+        iter_results = []
+        for iter in tqdm(range(0,n_iters)):
+
+            for fold, (train_idx, test_idx) in enumerate(outer_cv.split(X, y, groups=groups)):
+                print(f"Iteration {iter}, fold {fold}")
+
+                X_train = X.iloc[train_idx]
+                X_test = X.iloc[test_idx]
+
+                y_train = y.iloc[train_idx]
+                y_test = y.iloc[test_idx]
+
+                groups_train = groups[train_idx]
+
+                # Inner loop GridSearch
+                clf = GridSearchCV(
+                    pipeline,
+                    param_grid=param_subset,
+                    scoring=scoring,
+                    cv=inner_cv,
+                    n_jobs=-1,
+                    verbose=3
+                )
+                clf.fit(X_train, y_train, groups=groups_train)
+
+                #"Best model" is now the best estimator for the outer fold
+                best_model = clf.best_estimator_
+                y_pred = best_model.predict(X_test)
+                y_pred_prob = best_model.predict_proba(X_test)
+
+
+
+                y_true_binary = y_test
+                y_pred_binary = y_pred
+                y_pred_prob_binary = y_pred_prob[:, 1]
+                pred_prob_below_thresh = y_pred_prob_binary
+
+                #Compute Metrics for the fold
+                fpr, tpr, _ = roc_curve(y_true_binary, pred_prob_below_thresh)
+                roc_auc = auc(fpr, tpr)
+
+                # Metrics: Binarize
+                f1 = f1_score(y_true_binary, y_pred_binary, average='macro')
+
+
+                tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred_binary).ravel()
+                precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+                recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+                sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
+                specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
+
+                #Append to the larger list, which is faster than appending dfs
+                new_row = {
+                    'ModelName': model_name,
+                    'BestParams': clf.best_params_,  # dict of best hyperparameters found
+                    'Iter': iter,
+                    'Fold': fold + 1,
+                    'AUC': roc_auc,
+                    'F1': f1,
+                    'Sensitivity': sensitivity,
+                    'Specificity': specificity,
+                    'Precision': precision,
+                    'Recall': recall,
+                    'tp':tp,
+                    'tn':tn,
+                    'fp':fp,
+                    'fn':fn,
+                    'y_pred': y_pred,
+                    'y_pred_proba': y_pred_prob,
+                    'y_scores':pred_prob_below_thresh,
+                    'y_true':y_test,
+                    'y_true_binary': y_true_binary,
+                    'y_pred_binary': y_pred_binary,
+                    'y_pred_prob_binary':y_pred_prob_binary
+
+                }
+                iter_results.append(new_row)
+
+
+
+        all_iter_results = pd.DataFrame(iter_results)
+
+        all_iter_results.to_pickle(f'{folder_name}/{model_name}_nested_{file_name}.pkl')
+
+        print(all_iter_results.head())
+
+        print(f"Shape of final dataframe: {all_iter_results.shape}")
 
 
 
@@ -762,10 +873,10 @@ def key_set_optimization():
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
 
-    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=False,file_name='reg',folder_name='bins-pkls')
-    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=False,smote=True,file_name='smote',folder_name='bins-pkls')
-    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=False,file_name='reg',folder_name='binary-pkls')
-    nested_cross_optimize(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,raw_preds=True,smote=True,file_name='smote',folder_name='binary-pkls')
+    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=False, file_name='reg', folder_name='bins-pkls')
+    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='smote', folder_name='bins-pkls')
+    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=False, file_name='reg', folder_name='binary-pkls')
+    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=True, file_name='smote', folder_name='binary-pkls')
     Post_Iter_Processing(folder_name='bins-pkls/SMOTE')
     Post_Iter_Processing(folder_name='bins-pkls/No-SMOTE')
     Post_Iter_Processing(folder_name='binary-pkls/SMOTE')
@@ -820,16 +931,33 @@ def feature_set_optimize():
 
     # for key, value in set_dict.items():
     #     nested_cross_optimize(n_iters=1, k_outer=10, k_inner=10, all_labels=value,raw_preds=False,smote=False,file_name=key,folder_name='feature-selection-pkls')
-    for key, value in set_dict.items():
+    for key, value in set_diCct.items():
         Post_Iter_Processing(folder_name=f'feature-selection-pkls/{key}')
+
+def AzBio_optimization():
+    all_labels = [
+        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        'WRS_L', 'WRS_R', 'Age', 'AzBioQuiet_bi'
+    ]
+
+    # nested_cross_optimize_bilateral(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,smote=False,file_name='az',folder_name='AzBio-pkls-binary',target = 'AzBioQuiet_bi')
+    Post_Iter_Processing(folder_name='AzBio-pkls-binary')
+
+
+
 
 
 if __name__ == '__main__':
     # sixty_sixty_run()  #Run this to get 60/60 CM and information
     # Demographics_Table() #Run this to get demographics information
-    feature_set_optimize()
+    # feature_set_optimize()
+    AzBio_optimization()
 
 
 
 
-
+# target
