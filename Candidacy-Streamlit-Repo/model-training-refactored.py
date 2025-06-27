@@ -563,12 +563,24 @@ def Demographics_Table():
 
 
 
+class DebugSMOTE(SMOTE):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.before_counts_ = []
+        self.after_counts_ = []
+
+    def fit_resample(self, X, y):
+        self.before_counts_.append(np.bincount(y))
+        X_res, y_res = super().fit_resample(X, y)
+        self.after_counts_.append(np.bincount(y_res))
+        return X_res, y_res
 
 def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_labels=[], raw_preds=False, smote=False, file_name='', folder_name='', target='CNC'):
 
+
     if smote:
         pipeline = Pipeline([
-        ('smote', SMOTE(random_state=42)),
+        ('smote', DebugSMOTE(random_state=42)),
         ('scaler', preprocessing.StandardScaler()),  # Step 1: Scale features
         ('classifier', RandomForestClassifier(random_state=42))  # Step 2: Train classifier
         ])
@@ -585,16 +597,19 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
     scoring = 'f1_micro'
     param_grid = {
         'RandomForestClassifier':[
-        {  # Random Forest
-            'classifier': [RandomForestClassifier(random_state=42)],
-            'classifier__max_depth': [10, 20],
-            'classifier__min_samples_split': [2, 5]
-        }],
+            {
+                'classifier': [RandomForestClassifier(random_state=42)],
+                'classifier__n_estimators': [100, 200, 300],
+                'classifier__max_depth': [2, 3, 4, 5, None],
+                'classifier__min_samples_split': [2, 4, 8],
+                'classifier__min_samples_leaf': [1, 2, 4]
+            }],
         'XGClassifer':
         [{  # XGBoost
             'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
-            'classifier__max_depth': [3, 6],
-            'classifier__learning_rate': [0.01, 0.1]
+            'classifier__n_estimators': [100, 200],
+            'classifier__max_depth': [2,3,4,5],
+            'classifier__colsample_bytree': [0.7, 1.0],
         }],
         'LogisticRegression':
         [{  # Vanilla Logistic Regression (no hyperparameter tuning)
@@ -640,7 +655,9 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
 
                 groups_train = groups[train_idx]
 
-                # Inner loop GridSearch
+                #Inner loop GridSearch
+
+
                 clf = GridSearchCV(
                     pipeline,
                     param_grid=param_subset,
@@ -653,6 +670,15 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
 
                 #"Best model" is now the best estimator for the outer fold
                 best_model = clf.best_estimator_
+
+                smote_step = best_model.named_steps.get('smote', None)
+
+                if smote_step is not None and hasattr(smote_step, 'before_counts_'):
+                    smote_before = smote_step.before_counts_
+                    smote_after = smote_step.after_counts_
+                else:
+                    smote_before = None
+                    smote_after = None
                 y_pred = best_model.predict(X_test)
                 y_pred_prob = best_model.predict_proba(X_test)
 
@@ -706,7 +732,9 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
                     'y_true':y_test,
                     'y_true_binary': y_true_binary,
                     'y_pred_binary': y_pred_binary,
-                    'y_pred_prob_binary':y_pred_prob_binary
+                    'y_pred_prob_binary':y_pred_prob_binary,
+                    'SMOTE_before': smote_before,
+                    'SMOTE_after': smote_after
 
                 }
                 iter_results.append(new_row)
@@ -873,14 +901,15 @@ def key_set_optimization():
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
 
-    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=False, file_name='reg', folder_name='bins-pkls')
-    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='smote', folder_name='bins-pkls')
-    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=False, file_name='reg', folder_name='binary-pkls')
-    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=True, file_name='smote', folder_name='binary-pkls')
-    Post_Iter_Processing(folder_name='bins-pkls/SMOTE')
-    Post_Iter_Processing(folder_name='bins-pkls/No-SMOTE')
-    Post_Iter_Processing(folder_name='binary-pkls/SMOTE')
-    Post_Iter_Processing(folder_name='binary-pkls/No-Smote')
+    # nested_cross_optimize_ear_specific(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels, raw_preds=False, smote=True, file_name='test', folder_name='bins-pkls')
+    # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=False, file_name='reg', folder_name='bins-pkls')
+    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='upg', folder_name='bins-pkls') #upgraded parameters
+    # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=False, file_name='reg', folder_name='binary-pkls')
+    # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=True, file_name='smote', folder_name='binary-pkls')
+    # Post_Iter_Processing(folder_name='bins-pkls/SMOTE')
+    # Post_Iter_Processing(folder_name='bins-pkls/No-SMOTE')
+    # Post_Iter_Processing(folder_name='binary-pkls/SMOTE')
+    # Post_Iter_Processing(folder_name='binary-pkls/No-Smote')
 def feature_set_optimize():
     set_dict = {
         # "wrs":
@@ -955,9 +984,10 @@ if __name__ == '__main__':
     # sixty_sixty_run()  #Run this to get 60/60 CM and information
     # Demographics_Table() #Run this to get demographics information
     # feature_set_optimize()
-    AzBio_optimization()
+    # AzBio_optimization()
+    key_set_optimization()
 
 
 
 
-# target
+
