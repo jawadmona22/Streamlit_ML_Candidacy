@@ -21,7 +21,7 @@ import seaborn as sns
 from pathlib import Path
 from scipy.stats import t
 from sklearn import preprocessing
-
+from ordinal import OrdinalClassifier
 
 def Clean_Data(debug=False,all_labels=[]): #This function extracts the columns of interest, removes NA, and adds patient ID
     full_dataset = pd.read_csv("candidacy_v3.csv")
@@ -183,10 +183,49 @@ def sixty_sixty_predictions(X_test):
         hz_2000 = row["hz2000"]
         wrs = row["WRS"]
 
-        if hz_500 >= 60 and hz_1000 >= 60 and hz_2000 >= 60 and wrs < 60:
-            y_pred.append(1) #They are a candidate
+        PTA = (hz_500 + hz_1000 + hz_2000)/3
+
+        if PTA >= 60 and wrs < 60:
+            y_pred.append(1)  # They are a candidate
         else:
             y_pred.append(0)
+
+    return y_pred
+def sixty_sixty_predictions_az_bio(X_test):
+    y_pred = []
+    for index,row in X_test.iterrows():
+        #Determine better ear
+        hz_500_L = row["hz500_L"]
+        hz_1000_L = row["hz1000_L"]
+        hz_2000_L = row["hz2000_L"]
+        wrs_L= row["WRS_L"]
+
+        hz_500_R = row["hz500_R"]
+        hz_1000_R = row["hz1000_R"]
+        hz_2000_R= row["hz2000_R"]
+        wrs_R= row["WRS_R"]
+
+
+        if wrs_L  >= wrs_R: #Case: left is better ear
+            PTA = (hz_500_L + hz_1000_L + hz_2000_L) / 3
+            if PTA >= 60 and wrs_L < 60:
+                y_pred.append(1)  # They are a candidate
+            else:
+                y_pred.append(0)
+
+        if wrs_R > wrs_L: #Case: left is better ear
+            PTA = (hz_500_R + hz_1000_R + hz_2000_R) / 3
+            if PTA >= 60 and wrs_R < 60:
+                y_pred.append(1)  # They are a candidate
+            else:
+                y_pred.append(0)
+
+
+
+
+
+
+
 
     return y_pred
 
@@ -252,7 +291,78 @@ def sixty_sixty_run():
     ax.set_title(f"60/60 Rule", fontsize=14)
     plt.grid(False)
     plt.tight_layout()
-    plt.savefig(f'TRIO-figs/60-60-cm.png')
+    plt.savefig(f'TRIO-figs/60-60-cm-cnc.png')
+
+    tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred).ravel()
+    precision = precision_score(y_true_binary, y_pred, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred, zero_division=0)
+    sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0  # same as recall
+    specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
+    print(
+        f"Precision: {precision}, Recall: {recall}, F1: {f1}, Sensitivity:{sensitivity}, Specificity: {specificity}")
+
+def sixty_sixty_run_az_bio():
+    all_labels = [
+        'hz125_R', 'hz125_L', 'hz250_R', 'hz250_L',
+        'hz500_R', 'hz500_L', 'hz750_R', 'hz750_L',
+        'hz1000_R', 'hz1000_L', 'hz1500_R', 'hz1500_L',
+        'hz2000_R', 'hz2000_L', 'hz3000_R', 'hz3000_L',
+        'hz4000_R', 'hz4000_L', 'hz6000_R', 'hz6000_L', 'hz8000_R', 'hz8000_L',
+        'WRS_L', 'WRS_R', 'Age', 'AzBioQuiet_bi'
+    ]
+    filtered_dataset = Clean_Data(debug=False, all_labels=all_labels)
+    X_test = filtered_dataset.drop(columns=['AzBioQuiet_bi'])
+    y_test = filtered_dataset['AzBioQuiet_bi']
+
+    # Get predictions
+    y_pred = sixty_sixty_predictions_az_bio(X_test)
+    y_true_binary = (y_test < 60).astype(int)
+    print("Shape Y Pred:", len(y_pred))
+    print("Shape Y True:", len(y_true_binary))
+    # Accuracy
+    accuracy = accuracy_score(y_true_binary, y_pred)
+    print(f"Accuracy: {accuracy:.2f}")
+
+    # Confusion Matrix
+    conf_matrix = confusion_matrix(y_true_binary, y_pred)
+    total = conf_matrix.sum()
+    percent_matrix = conf_matrix / total * 100
+    percent_matrix = np.round(percent_matrix, 1)
+
+    # Define annotations and custom colors
+    labels = np.array([
+        [f"{percent_matrix[0, 0]}%", f" {percent_matrix[0, 1]}%"],
+        [f"{percent_matrix[1, 0]}%", f" {percent_matrix[1, 1]}%"]
+    ])
+
+    # Custom color matrix: light red for FP/FN, green for TP/TN
+    colors = np.array([
+        ['#a8e6a1', '#f4cccc'],  # TN, FP
+        ['#f4cccc', '#a8e6a1']  # FN, TP
+    ])
+
+    # Plot with custom colored cells
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    for i in range(2):
+        for j in range(2):
+            ax.add_patch(plt.Rectangle((j, i), 1, 1, color=colors[i, j]))
+            ax.text(j + 0.5, i + 0.5, labels[i, j],
+                    ha='center', va='center', fontsize=12, fontweight='bold')
+
+    # Formatting
+    ax.set_xticks([0.5, 1.5])
+    ax.set_yticks([0.5, 1.5])
+    ax.set_xticklabels(['Predicted Non-Candidate', 'Predicted Candidate'])
+    ax.set_yticklabels(['Actual Non-Candidate', 'Actual Candidate'])
+    ax.set_xlim(0, 2)
+    ax.set_ylim(0, 2)
+    ax.invert_yaxis()
+    ax.set_title(f"60/60 Rule", fontsize=14)
+    plt.grid(False)
+    plt.tight_layout()
+    plt.savefig(f'TRIO-figs/60-60-cm-azbio.png')
 
     tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred).ravel()
     precision = precision_score(y_true_binary, y_pred, zero_division=0)
@@ -288,7 +398,9 @@ def Post_Iter_Processing(folder_name = ''):
         if suffix == 'reg':
                 tag = "No SMOTE"
         else:
-            tag = suffix.upper() #SMOTE is the other option
+            # tag = suffix.upper() #SMOTE is the other option
+            tag = "SMOTE"
+
 
 
 
@@ -459,6 +571,10 @@ def Post_Iter_Processing(folder_name = ''):
             tprs.append(interp_tpr)
             aucs.append(roc_auc)
 
+
+
+
+
         mean_tpr = np.mean(tprs,axis=0)
         mean_tpr[-1] = 1.0
         std_auc = np.std(aucs)
@@ -484,7 +600,6 @@ def Post_Iter_Processing(folder_name = ''):
             alpha=0.2,
            )
 
-        # Step 3: Customize labels, title, and legend
         auc_ax.set_xlabel("False Positive Rate")
         auc_ax.set_ylabel("True Positive Rate")
         auc_ax.set_title(f"Mean ROC ({tag})")
@@ -502,7 +617,36 @@ def Post_Iter_Processing(folder_name = ''):
     auc_fig.tight_layout()
     auc_fig.savefig(f"TRIO-figs/AUROC-{root_folder}-{tag}")
 
+    #----- Histograms of SMOTE Distributions ---- #
+    deltas = []
+    for _, row in df.iterrows():
+        ##SMOTE procedure
+        smote_before = np.array(row['SMOTE_before'])
+        smote_after = np.array(row['SMOTE_after'])
+        delta = smote_after - smote_before
+        deltas.append(delta)
 
+    delta_sums = np.sum(deltas, axis=0)[0]
+    delta_means = np.mean(deltas,axis=0)[0]
+    plt.close('all')
+    plt.figure()
+    print(delta_sums)
+    plt.bar(range(11), delta_sums)
+
+    plt.xlabel('Bin')
+    plt.ylabel('Sum of Changes Across Inner K-Fold')
+    plt.title('SMOTE Delta Changes')
+    plt.show()
+
+    plt.close('all')
+    plt.figure()
+    print(delta_means)
+    plt.bar(range(11), delta_means)
+
+    plt.xlabel('Bin')
+    plt.ylabel('Mean Changes Across Inner K-Fold')
+    plt.title('SMOTE Average Delta')
+    plt.show()
 
     summary_df = pd.concat(iter_info, ignore_index=True)
     print(summary_df.head())
@@ -607,9 +751,10 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
         'XGClassifer':
         [{  # XGBoost
             'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
-            'classifier__n_estimators': [100, 200],
-            'classifier__max_depth': [2,3,4,5],
-            'classifier__colsample_bytree': [0.7, 1.0],
+            'classifier__n_estimators': [150, 300, 450],
+            'classifier__max_depth': [2,4,6],
+            'classifier__reg_alpha': [0, 0.01,.5]
+
         }],
         'LogisticRegression':
         [{  # Vanilla Logistic Regression (no hyperparameter tuning)
@@ -639,7 +784,9 @@ def nested_cross_optimize_ear_specific(n_iters=1, k_outer=10, k_inner=10, all_la
 
     for model_name, param_subset in param_grid.items():
         print(f"Running procedure for {model_name}")
-
+        # base_model = param_subset[0]["classifier"][0]
+        # ordinal_clf = OrdinalClassifier(estimator=base_model)
+        # pipeline.set_params(classifier=ordinal_clf)
 
         iter_results = []
         for iter in tqdm(range(0,n_iters)):
@@ -778,7 +925,10 @@ def nested_cross_optimize_bilateral(n_iters=1, k_outer=10, k_inner=10, all_label
         [{  # XGBoost
             'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
             'classifier__max_depth': [3, 6],
-            'classifier__learning_rate': [0.01, 0.1]
+            'classifier__learning_rate': [0.05, 0.01],
+            'classifier__n_estimators': [150,300,450],
+            'classifier__subsample':[0.5,.7],
+
         }],
         'LogisticRegression':
         [{  # Vanilla Logistic Regression (no hyperparameter tuning)
@@ -901,15 +1051,18 @@ def key_set_optimization():
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
 
-    # nested_cross_optimize_ear_specific(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels, raw_preds=False, smote=True, file_name='test', folder_name='bins-pkls')
+    # nested_cross_optimize_ear_specific(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels, raw_preds=False, smote=True, file_name='test-ord', folder_name='bins-pkls')
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=False, file_name='reg', folder_name='bins-pkls')
-    nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='upg', folder_name='bins-pkls') #upgraded parameters
+    # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='upg', folder_name='bins-pkls') #upgraded parameters
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=False, file_name='reg', folder_name='binary-pkls')
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=True, file_name='smote', folder_name='binary-pkls')
     # Post_Iter_Processing(folder_name='bins-pkls/SMOTE')
     # Post_Iter_Processing(folder_name='bins-pkls/No-SMOTE')
     # Post_Iter_Processing(folder_name='binary-pkls/SMOTE')
     # Post_Iter_Processing(folder_name='binary-pkls/No-Smote')
+    # Post_Iter_Processing(folder_name='bins-pkls/upg')
+    # Post_Iter_Processing(folder_name='bins-pkls/ordinal')
+    Post_Iter_Processing(folder_name='bins-pkls/test')
 def feature_set_optimize():
     set_dict = {
         # "wrs":
@@ -960,7 +1113,7 @@ def feature_set_optimize():
 
     # for key, value in set_dict.items():
     #     nested_cross_optimize(n_iters=1, k_outer=10, k_inner=10, all_labels=value,raw_preds=False,smote=False,file_name=key,folder_name='feature-selection-pkls')
-    for key, value in set_diCct.items():
+    for key, value in set_dict.items():
         Post_Iter_Processing(folder_name=f'feature-selection-pkls/{key}')
 
 def AzBio_optimization():
@@ -973,7 +1126,7 @@ def AzBio_optimization():
         'WRS_L', 'WRS_R', 'Age', 'AzBioQuiet_bi'
     ]
 
-    # nested_cross_optimize_bilateral(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,smote=False,file_name='az',folder_name='AzBio-pkls-binary',target = 'AzBioQuiet_bi')
+    nested_cross_optimize_bilateral(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels,smote=False,file_name='az',folder_name='AzBio-pkls-binary',target = 'AzBioQuiet_bi')
     Post_Iter_Processing(folder_name='AzBio-pkls-binary')
 
 
@@ -986,6 +1139,7 @@ if __name__ == '__main__':
     # feature_set_optimize()
     # AzBio_optimization()
     key_set_optimization()
+    # sixty_sixty_run_az_bio()
 
 
 
