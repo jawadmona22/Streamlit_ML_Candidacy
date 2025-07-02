@@ -923,11 +923,13 @@ def nested_cross_optimize_bilateral(n_iters=1, k_outer=10, k_inner=10, all_label
         }],
         'XGClassifer':
         [{  # XGBoost
-            'classifier': [XGBClassifier(eval_metric='logloss', random_state=42)],
-            'classifier__max_depth': [3, 6],
+            'classifier': [XGBClassifier(eval_metric='logloss', random_state=42,tree_method="hist")],
+            'classifier__max_depth': [2, 4, 6],
             'classifier__learning_rate': [0.05, 0.01],
-            'classifier__n_estimators': [150,300,450],
-            'classifier__subsample':[0.5,.7],
+            'classifier__n_estimators': [150, 300, 450],
+            'classifier__subsample':[0.5, 0.7, 0.9],
+            'classifier__reg_alpha': [0, 0.01, 0.1,0.5],
+            'classifier_reg_lambda': [0, 0.01, 0.1, 0.5]
 
         }],
         'LogisticRegression':
@@ -1051,7 +1053,7 @@ def key_set_optimization():
         'WRS_L', 'WRS_R', 'Age', 'CNC_L', 'CNC_R'
     ]
 
-    # nested_cross_optimize_ear_specific(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels, raw_preds=False, smote=True, file_name='test-ord', folder_name='bins-pkls')
+    nested_cross_optimize_ear_specific(n_iters=1, k_outer=2, k_inner=2, all_labels=all_labels, raw_preds=False, smote=True, file_name='test-ord', folder_name='bins-pkls')
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=False, file_name='reg', folder_name='bins-pkls')
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=False, smote=True, file_name='upg', folder_name='bins-pkls') #upgraded parameters
     # nested_cross_optimize_ear_specific(n_iters=100, k_outer=10, k_inner=10, all_labels=all_labels, raw_preds=True, smote=False, file_name='reg', folder_name='binary-pkls')
@@ -1062,7 +1064,7 @@ def key_set_optimization():
     # Post_Iter_Processing(folder_name='binary-pkls/No-Smote')
     # Post_Iter_Processing(folder_name='bins-pkls/upg')
     # Post_Iter_Processing(folder_name='bins-pkls/ordinal')
-    Post_Iter_Processing(folder_name='bins-pkls/test')
+    # Post_Iter_Processing(folder_name='bins-pkls/test')
 def feature_set_optimize():
     set_dict = {
         # "wrs":
